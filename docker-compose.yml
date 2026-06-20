@@ -1,0 +1,49 @@
+# SteelCAD — Docker Compose
+# Runs PostgreSQL, backend API, and (later) frontend
+
+services:
+  # ─── PostgreSQL Database ─────────────────────────────
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-steelcad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-steelcad}
+      POSTGRES_DB: ${POSTGRES_DB:-steelcad}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U steelcad"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ─── Backend API ─────────────────────────────────────
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-steelcad}:${POSTGRES_PASSWORD:-steelcad}@db:5432/${POSTGRES_DB:-steelcad}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key-change-in-production}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # ─── Frontend (added in Phase 2) ────────────────────
+  # frontend:
+  #   build: ./frontend
+  #   ports:
+  #     - "5173:5173"
+  #   depends_on:
+  #     - backend
+
+volumes:
+  pgdata:

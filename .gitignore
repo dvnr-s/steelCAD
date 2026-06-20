@@ -4,3 +4,8 @@ credentials.json
 token.json
 __pycache__/
 *.pyc
+
+# Virtual environments
+venv/
+.venv/
+env/

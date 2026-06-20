@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SteelCAD Estimate — {{ design_name }}</title>
+    <style>
+        /* ─── Page & Typography ─────────────────────────── */
+        @page {
+            size: A4;
+            margin: 20mm 15mm 20mm 15mm;
+            @bottom-center {
+                content: "Page " counter(page) " of " counter(pages);
+                font-size: 9px;
+                color: #888;
+            }
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 11px;
+            color: #1a1a1a;
+            line-height: 1.5;
+        }
+
+        /* ─── Header ────────────────────────────────────── */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            border-bottom: 3px solid #1e3a5f;
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+        }
+        .header-left h1 {
+            font-size: 22px;
+            color: #1e3a5f;
+            margin-bottom: 2px;
+            letter-spacing: 1px;
+        }
+        .header-left .tagline {
+            font-size: 10px;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .header-right {
+            text-align: right;
+            font-size: 10px;
+            color: #555;
+        }
+        .header-right .version-badge {
+            display: inline-block;
+            background: #1e3a5f;
+            color: #fff;
+            padding: 2px 10px;
+            border-radius: 3px;
+            font-weight: 600;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        /* ─── Design Info Card ──────────────────────────── */
+        .info-card {
+            background: #f0f4f8;
+            border: 1px solid #d0d8e0;
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-bottom: 16px;
+            display: flex;
+            gap: 30px;
+        }
+        .info-card .label {
+            font-size: 9px;
+            text-transform: uppercase;
+            color: #777;
+            letter-spacing: 0.5px;
+            margin-bottom: 1px;
+        }
+        .info-card .value {
+            font-size: 12px;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+
+        /* ─── Section Headers ───────────────────────────── */
+        .section-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: #1e3a5f;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            border-bottom: 1.5px solid #c0c8d0;
+            padding-bottom: 4px;
+            margin: 16px 0 8px 0;
+        }
+
+        /* ─── Tables ────────────────────────────────────── */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 12px;
+        }
+        th {
+            background: #1e3a5f;
+            color: #fff;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 6px 8px;
+            text-align: left;
+        }
+        th.right, td.right { text-align: right; }
+        th.center, td.center { text-align: center; }
+        td {
+            padding: 5px 8px;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 11px;
+        }
+        tr:nth-child(even) td {
+            background: #f8f9fa;
+        }
+        .region-header td {
+            background: #e8edf2 !important;
+            font-weight: 600;
+            font-size: 11px;
+            color: #1e3a5f;
+            border-bottom: 1.5px solid #c0c8d0;
+        }
+        .subtotal-row td {
+            font-weight: 600;
+            border-top: 1.5px solid #333;
+            border-bottom: none;
+        }
+
+        /* ─── Totals Box ────────────────────────────────── */
+        .totals-box {
+            width: 55%;
+            margin-left: auto;
+            margin-top: 12px;
+            border: 2px solid #1e3a5f;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .totals-box table { margin-bottom: 0; }
+        .totals-box td {
+            padding: 6px 12px;
+            border-bottom: 1px solid #e0e4e8;
+        }
+        .totals-box tr:last-child td { border-bottom: none; }
+        .totals-box .label-col {
+            font-weight: 600;
+            color: #333;
+            width: 60%;
+        }
+        .totals-box .value-col {
+            text-align: right;
+            font-weight: 600;
+            color: #1a1a1a;
+        }
+        .totals-box .grand-total td {
+            background: #1e3a5f;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 700;
+            padding: 8px 12px;
+        }
+        .totals-box .advance td {
+            background: #e8edf2;
+            color: #1e3a5f;
+            font-weight: 700;
+        }
+
+        /* ─── Footer ────────────────────────────────────── */
+        .footer {
+            margin-top: 20px;
+            padding-top: 10px;
+            border-top: 1px solid #ccc;
+            font-size: 9px;
+            color: #888;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ─── Header ─────────────────────────────────────── -->
+    <div class="header">
+        <div class="header-left">
+            <h1>STEELCAD</h1>
+            <div class="tagline">Steel Door &amp; Window Estimate</div>
+        </div>
+        <div class="header-right">
+            <div class="version-badge">Version {{ version_number }}</div>
+            <div>Created: {{ created_at }}</div>
+            <div>Generated: {{ generated_at }}</div>
+        </div>
+    </div>
+
+    <!-- ─── Design Info ────────────────────────────────── -->
+    <div class="info-card">
+        <div>
+            <div class="label">Design Name</div>
+            <div class="value">{{ design_name }}</div>
+        </div>
+        <div>
+            <div class="label">Dimensions</div>
+            <div class="value">{{ design_dims }}</div>
+        </div>
+        <div>
+            <div class="label">Section</div>
+            <div class="value">{{ section_info }}</div>
+        </div>
+    </div>
+
+    <!-- ─── Structure Costs ────────────────────────────── -->
+    <div class="section-title">Structure — Frame &amp; Splits</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th>Description</th>
+                <th class="right">Qty</th>
+                <th class="center">Unit</th>
+                <th class="right">Rate (₹)</th>
+                <th class="right">Amount (₹)</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Frame -->
+            <tr>
+                <td>{{ breakdown.frame.label }}</td>
+                <td>{{ breakdown.frame.description }}</td>
+                <td class="right">{{ breakdown.frame.quantity }}</td>
+                <td class="center">{{ breakdown.frame.unit }}</td>
+                <td class="right">{{ "%.2f"|format(breakdown.frame.rate) }}</td>
+                <td class="right">{{ "%.2f"|format(breakdown.frame.cost) }}</td>
+            </tr>
+            <!-- Splits -->
+            {% for split in breakdown.splits %}
+            <tr>
+                <td>{{ split.label }}</td>
+                <td>{{ split.description }}</td>
+                <td class="right">{{ split.quantity }}</td>
+                <td class="center">{{ split.unit }}</td>
+                <td class="right">{{ "%.2f"|format(split.rate) }}</td>
+                <td class="right">{{ "%.2f"|format(split.cost) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- ─── Region Costs ───────────────────────────────── -->
+    {% if breakdown.regions %}
+    <div class="section-title">Region Costs — Panes, Infill, Grill, Hardware</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th>Description</th>
+                <th class="right">Qty</th>
+                <th class="center">Unit</th>
+                <th class="right">Rate (₹)</th>
+                <th class="right">Amount (₹)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for region in breakdown.regions %}
+            <!-- Region header row -->
+            <tr class="region-header">
+                <td colspan="5">{{ region.region_label }} — {{ region.region_type | upper }} ({{ region.dimensions }})</td>
+                <td class="right">{{ "%.2f"|format(region.subtotal) }}</td>
+            </tr>
+            {% if region.pane_structure %}
+            <tr>
+                <td>&nbsp;&nbsp;&nbsp;{{ region.pane_structure.label }}</td>
+                <td>{{ region.pane_structure.description }}</td>
+                <td class="right">{{ region.pane_structure.quantity }}</td>
+                <td class="center">{{ region.pane_structure.unit }}</td>
+                <td class="right">{{ "%.2f"|format(region.pane_structure.rate) }}</td>
+                <td class="right">{{ "%.2f"|format(region.pane_structure.cost) }}</td>
+            </tr>
+            {% endif %}
+            {% if region.infill %}
+            <tr>
+                <td>&nbsp;&nbsp;&nbsp;{{ region.infill.label }}</td>
+                <td>{{ region.infill.description }}</td>
+                <td class="right">{{ region.infill.quantity }}</td>
+                <td class="center">{{ region.infill.unit }}</td>
+                <td class="right">{{ "%.2f"|format(region.infill.rate) }}</td>
+                <td class="right">{{ "%.2f"|format(region.infill.cost) }}</td>
+            </tr>
+            {% endif %}
+            {% if region.beading %}
+            <tr>
+                <td>&nbsp;&nbsp;&nbsp;{{ region.beading.label }}</td>
+                <td>{{ region.beading.description }}</td>
+                <td class="right">{{ region.beading.quantity }}</td>
+                <td class="center">{{ region.beading.unit }}</td>
+                <td class="right">{{ "%.2f"|format(region.beading.rate) }}</td>
+                <td class="right">{{ "%.2f"|format(region.beading.cost) }}</td>
+            </tr>
+            {% endif %}
+            {% if region.grill %}
+            <tr>
+                <td>&nbsp;&nbsp;&nbsp;{{ region.grill.label }}</td>
+                <td>{{ region.grill.description }}</td>
+                <td class="right">{{ region.grill.quantity }}</td>
+                <td class="center">{{ region.grill.unit }}</td>
+                <td class="right">{{ "%.2f"|format(region.grill.rate) }}</td>
+                <td class="right">{{ "%.2f"|format(region.grill.cost) }}</td>
+            </tr>
+            {% endif %}
+            {% for hw in region.hardware %}
+            <tr>
+                <td>&nbsp;&nbsp;&nbsp;{{ hw.label }}</td>
+                <td>{{ hw.description }}</td>
+                <td class="right">{{ hw.quantity }}</td>
+                <td class="center">{{ hw.unit }}</td>
+                <td class="right">{{ "%.2f"|format(hw.rate) }}</td>
+                <td class="right">{{ "%.2f"|format(hw.cost) }}</td>
+            </tr>
+            {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <!-- ─── Totals ─────────────────────────────────────── -->
+    <div class="totals-box">
+        <table>
+            <tr>
+                <td class="label-col">Subtotal</td>
+                <td class="value-col">₹{{ "%.2f"|format(breakdown.subtotal) }}</td>
+            </tr>
+            {% if breakdown.discount_amount > 0 %}
+            <tr>
+                <td class="label-col">
+                    Discount
+                    {% if breakdown.discount_type == "PERCENTAGE" %}
+                        ({{ breakdown.discount_value }}%)
+                    {% else %}
+                        (Flat)
+                    {% endif %}
+                </td>
+                <td class="value-col">− ₹{{ "%.2f"|format(breakdown.discount_amount) }}</td>
+            </tr>
+            {% endif %}
+            <tr>
+                <td class="label-col">Taxable Amount</td>
+                <td class="value-col">₹{{ "%.2f"|format(breakdown.taxable) }}</td>
+            </tr>
+            <tr>
+                <td class="label-col">GST (18%)</td>
+                <td class="value-col">₹{{ "%.2f"|format(breakdown.gst) }}</td>
+            </tr>
+            <tr class="grand-total">
+                <td class="label-col">Grand Total</td>
+                <td class="value-col">₹{{ "{:,}"|format(breakdown.grand_total) }}</td>
+            </tr>
+            <tr class="advance">
+                <td class="label-col">Advance ({{ breakdown.advance_pct }}%)</td>
+                <td class="value-col">₹{{ "{:,}"|format(breakdown.advance_amount) }}</td>
+            </tr>
+        </table>
+    </div>
+
+    <!-- ─── Footer ─────────────────────────────────────── -->
+    <div class="footer">
+        This is a computer-generated estimate. Rates are subject to change.
+        Generated by SteelCAD v1.0
+    </div>
+
+</body>
+</html>
