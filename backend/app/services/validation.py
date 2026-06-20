@@ -1,0 +1,183 @@
+"""
+Design tree validation service.
+Implements invariants (INV-1..INV-10) and validation rules (V-1..V-15)
+from design_rules_spec.md §3.3 and §11.
+"""
+
+
+def validate_design_tree(tree: dict) -> list[str]:
+    """
+    Validate the entire design tree.
+    Returns a list of error messages. Empty list = valid.
+    """
+    errors: list[str] = []
+
+    # V-1: Frame dimensions >= 1 ft
+    frame = tree.get("frame")
+    if not frame:
+        errors.append("Design must have a frame (INV-1)")
+        return errors
+
+    if frame.get("width", 0) < 1:
+        errors.append("V-1: Frame width must be ≥ 1 ft")
+    if frame.get("height", 0) < 1:
+        errors.append("V-1: Frame height must be ≥ 1 ft")
+
+    # INV-2: Frame has exactly one root region
+    root = frame.get("rootRegion")
+    if not root:
+        errors.append("INV-2: Frame must have a root region")
+        return errors
+
+    # INV-10: all splits use same section/gauge as design root
+    # (enforced structurally — no per-split override fields in schema)
+
+    # Recursively validate regions
+    _validate_region(root, errors)
+
+    return errors
+
+
+def _validate_region(region: dict, errors: list[str]) -> None:
+    """Recursively validate a region and its descendants."""
+    rid = str(region.get("id", "?"))
+    w = region.get("width", 0)
+    h = region.get("height", 0)
+
+    # V-2: Minimum region dimensions
+    if w < 0.5:
+        errors.append(f"V-2: Region {rid} width ({w}ft) < 0.5ft minimum")
+    if h < 0.5:
+        errors.append(f"V-2: Region {rid} height ({h}ft) < 0.5ft minimum")
+
+    is_leaf = region.get("isLeaf", True)
+    split = region.get("split")
+
+    # INV-4: Leaf ↔ split consistency
+    if is_leaf and split is not None:
+        errors.append(f"INV-4: Region {rid} is marked leaf but has a split")
+    if not is_leaf and split is None:
+        errors.append(f"INV-4: Region {rid} is marked branch but has no split")
+
+    if is_leaf:
+        _validate_leaf(region, errors)
+    else:
+        _validate_branch(region, errors)
+
+    # Recurse into children
+    if split:
+        children = split.get("children", [])
+
+        # INV-3: Every split has exactly 2 children
+        if len(children) != 2:
+            errors.append(
+                f"INV-3: Split {split.get('id', '?')} must have exactly 2 children, "
+                f"has {len(children)}"
+            )
+
+        # INV-8: Split position strictly between 0 and 1
+        pos = split.get("position", 0.5)
+        if pos <= 0 or pos >= 1:
+            errors.append(
+                f"INV-8: Split position must be in (0, 1) exclusive, got {pos}"
+            )
+
+        # V-3: Split leaves >= 0.5 ft on each side
+        direction = split.get("direction", "vertical")
+        if direction == "vertical":
+            side_a, side_b = w * pos, w * (1 - pos)
+        else:
+            side_a, side_b = h * pos, h * (1 - pos)
+
+        if side_a < 0.5:
+            errors.append(
+                f"V-3: Split {split.get('id', '?')} leaves only "
+                f"{side_a:.2f}ft on side A (minimum 0.5ft)"
+            )
+        if side_b < 0.5:
+            errors.append(
+                f"V-3: Split {split.get('id', '?')} leaves only "
+                f"{side_b:.2f}ft on side B (minimum 0.5ft)"
+            )
+
+        for child in children:
+            _validate_region(child, errors)
+
+
+def _validate_leaf(region: dict, errors: list[str]) -> None:
+    """Validate a leaf region's type, pane spec, and hardware."""
+    rid = str(region.get("id", "?"))
+    rt = region.get("regionType")
+    ps = region.get("paneSpec")
+    hardware = region.get("hardware", [])
+
+    # INV-7: Every leaf must have a regionType
+    if not rt:
+        errors.append(f"INV-7: Leaf region {rid} must have a regionType (default: 'open')")
+        return
+
+    # P-5: open/louver have no pane spec
+    if rt in ("open", "louver") and ps:
+        infill = ps.get("infillType", "none")
+        if infill != "none" or ps.get("hasBeading") or ps.get("shutterMaterial"):
+            errors.append(f"P-5: '{rt}' region {rid} should not have pane specification")
+
+    # V-12: shutter/door must have shutter material
+    if rt in ("shutter", "door"):
+        if not ps or not ps.get("shutterMaterial"):
+            errors.append(f"V-12: {rt} region {rid} must have a shutter material selected")
+
+    # V-5: shutter/door must have at least one hinge
+    if rt in ("shutter", "door"):
+        has_hinge = any(hw.get("hardwareType") == "hinge" for hw in hardware)
+        if not has_hinge:
+            errors.append(f"V-5: {rt} region {rid} must have at least one hinge")
+
+    # V-14: Lock only on door regions
+    for hw in hardware:
+        if hw.get("hardwareType") == "lock" and rt != "door":
+            errors.append(
+                f"V-14: Lock cannot be applied to '{rt}' region {rid}. "
+                f"Only 'door' regions."
+            )
+
+    # V-15: Door regions must have infillType "none" (solid panel)
+    if rt == "door" and ps:
+        if ps.get("infillType", "none") != "none":
+            errors.append(f"V-15: Door region {rid} must have infillType 'none' (solid panel)")
+
+    # V-13: Beading requires infill
+    if ps and ps.get("hasBeading"):
+        if ps.get("infillType", "none") == "none":
+            errors.append(f"V-13: Beading on region {rid} requires infill (glass or jali)")
+
+    # V-9: Grill overlays must have valid material
+    for overlay in region.get("overlays", []):
+        if not overlay.get("material"):
+            errors.append(f"V-9: Grill on region {rid} must have a valid material")
+
+
+def _validate_branch(region: dict, errors: list[str]) -> None:
+    """Validate a branch region — must not have leaf-only properties."""
+    rid = str(region.get("id", "?"))
+
+    # INV-6: Branch regionType must be null
+    if region.get("regionType"):
+        errors.append(f"INV-6: Branch region {rid} must not have a regionType")
+
+    # INV-6: Branch paneSpec must be null/empty
+    ps = region.get("paneSpec")
+    if ps:
+        if (ps.get("infillType", "none") != "none"
+                or ps.get("hasBeading")
+                or ps.get("shutterMaterial")):
+            errors.append(f"INV-6: Branch region {rid} must not have pane specification")
+
+    # INV-6: Branch hardware must be empty
+    if region.get("hardware"):
+        errors.append(f"INV-6: Branch region {rid} must not have hardware")
+
+    # INV-5 / V-6: Branch regions may ONLY have SS grill overlays (not MS)
+    for overlay in region.get("overlays", []):
+        if overlay.get("material") == "MS_SQUARE":
+            errors.append(f"V-6: MS grill cannot be applied to branch region {rid}")

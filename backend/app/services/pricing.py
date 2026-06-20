@@ -1,0 +1,472 @@
+"""
+SteelCAD Pricing Engine
+========================
+
+Pure Python module — NO database access, NO side effects.
+Takes the design tree JSON + rate lookup dict → returns full itemized breakdown.
+
+Implements the traversal algorithm from design_rules_spec.md §9.
+
+Key design decisions:
+  - All monetary values kept to 2 decimal places (PR-1, PR-2).
+  - Grand total rounded to nearest rupee (PR-3).
+  - GST = 18% on post-discount amount (PR-4).
+  - MS grill = area-based pricing (§6.1).
+  - SS grill = bar-count pricing (§6.2), supports continuity on branch regions.
+  - Structural pane cost only on shutter/door regions, NOT fixed (§5.2, P-4).
+"""
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Optional
+
+
+# Type alias for rate dictionary
+RateDict = dict[str, float]
+
+
+# ─── Rounding helpers ──────────────────────────────────────────────
+
+def _round2(value: float) -> float:
+    """Round to 2 decimal places (PR-1, PR-2)."""
+    return float(Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _round_rupee(value: float) -> int:
+    """Round to nearest rupee (PR-3)."""
+    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+# ─── Rate lookup ───────────────────────────────────────────────────
+
+def _lookup_rate(key: str, rates: RateDict) -> float:
+    """Lookup a rate by item code. Raises ValueError if not found."""
+    if key not in rates:
+        raise ValueError(f"Unknown rate key: {key}")
+    return rates[key]
+
+
+def _section_rate(section_size: str, gauge: str, rates: RateDict) -> float:
+    """Resolve frame/split section rate from size + gauge."""
+    return _lookup_rate(f"SECTION_{section_size}_{gauge}", rates)
+
+
+# ─── Frame cost (§9.1 step 1) ─────────────────────────────────────
+
+def _compute_frame_cost(frame: dict, rate: float) -> dict:
+    """Frame cost = perimeter × section rate."""
+    w, h = frame["width"], frame["height"]
+    rf = _round2(2 * (w + h))
+    cost = _round2(rf * rate)
+    return {
+        "label": "Frame",
+        "description": f"Frame perimeter {rf} RFT × ₹{rate}/RFT",
+        "quantity": rf,
+        "unit": "RFT",
+        "rate": rate,
+        "cost": cost,
+    }
+
+
+# ─── Split costs (§9.1 step 2) ────────────────────────────────────
+
+def _collect_splits(region: dict) -> list[dict]:
+    """
+    Recursively collect all splits in the tree.
+    Each split's length = parent region's height (vertical) or width (horizontal).
+    """
+    splits = []
+    split = region.get("split")
+    if split is None:
+        return splits
+
+    direction = split["direction"]
+    if direction == "vertical":
+        length = region["height"]
+        label = "Mullion (vertical)"
+    else:
+        length = region["width"]
+        label = "Transom (horizontal)"
+
+    splits.append({
+        "split_id": split.get("id", ""),
+        "direction": direction,
+        "length": _round2(length),
+        "label": label,
+    })
+
+    for child in split.get("children", []):
+        splits.extend(_collect_splits(child))
+
+    return splits
+
+
+def _compute_split_costs(splits: list[dict], rate: float) -> list[dict]:
+    """Convert collected splits into priced line items. All splits share the frame's section rate."""
+    items = []
+    for s in splits:
+        length = s["length"]
+        cost = _round2(length * rate)
+        items.append({
+            "label": s["label"],
+            "description": f"{s['label']} {length} RFT × ₹{rate}/RFT",
+            "quantity": length,
+            "unit": "RFT",
+            "rate": rate,
+            "cost": cost,
+        })
+    return items
+
+
+# ─── Pane structure cost (§5.2) ────────────────────────────────────
+
+def _compute_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
+    """
+    Structural pane cost for shutter/door regions.
+    pane_RF = 2 × (width + height), cost = pane_RF × shutter_material_rate.
+    Fixed regions do NOT have structural pane cost (P-4).
+    """
+    rt = region.get("regionType")
+    if rt not in ("shutter", "door"):
+        return None
+
+    ps = region.get("paneSpec")
+    if not ps:
+        return None
+
+    mat = ps.get("shutterMaterial")
+    if not mat:
+        return None
+
+    w, h = region["width"], region["height"]
+    rf = _round2(2 * (w + h))
+    rate = _lookup_rate(f"SHUTTER_{mat}", rates)
+    cost = _round2(rf * rate)
+
+    mat_label = "MS Pipe" if mat == "MS_PIPE" else "GP Sheet"
+    type_label = "Shutter" if rt == "shutter" else "Door"
+
+    return {
+        "label": f"{type_label} pane ({mat_label})",
+        "description": f"{type_label} pane {rf} RFT × ₹{rate}/RFT",
+        "quantity": rf,
+        "unit": "RFT",
+        "rate": rate,
+        "cost": cost,
+    }
+
+
+# ─── Infill cost (§5.3) ───────────────────────────────────────────
+
+def _compute_infill(region: dict, rates: RateDict) -> Optional[dict]:
+    """
+    Infill cost: glass = ₹0 (no line item needed), jali = area-based.
+    Jali cost is ADDITIONAL to pane structure cost — never replaces it (P-7).
+    """
+    ps = region.get("paneSpec")
+    if not ps:
+        return None
+
+    if ps.get("infillType") != "jali":
+        return None  # glass = ₹0, no line item
+
+    w, h = region["width"], region["height"]
+    area = _round2(w * h)
+    rate = _lookup_rate("JALI_WIRE_MESH", rates)
+    cost = _round2(area * rate)
+
+    return {
+        "label": "Jali wire mesh",
+        "description": f"Jali {area} sqft × ₹{rate}/sqft",
+        "quantity": area,
+        "unit": "sqft",
+        "rate": rate,
+        "cost": cost,
+    }
+
+
+# ─── Beading cost (§5.4) ──────────────────────────────────────────
+
+def _compute_beading(region: dict, rates: RateDict) -> Optional[dict]:
+    """
+    Beading cost = perimeter × beading rate.
+    Applies to BOTH glass and jali panes (P-8). Requires infill (P-9, V-13).
+    """
+    ps = region.get("paneSpec")
+    if not ps or not ps.get("hasBeading"):
+        return None
+
+    if ps.get("infillType", "none") == "none":
+        return None  # V-13: beading requires infill
+
+    w, h = region["width"], region["height"]
+    rf = _round2(2 * (w + h))
+    rate = _lookup_rate("GLASS_BEADING", rates)
+    cost = _round2(rf * rate)
+
+    return {
+        "label": "Beading",
+        "description": f"Beading {rf} RFT × ₹{rate}/RFT",
+        "quantity": rf,
+        "unit": "RFT",
+        "rate": rate,
+        "cost": cost,
+    }
+
+
+# ─── Grill cost (§6) ──────────────────────────────────────────────
+
+def _compute_grill(overlay: dict, region: dict, rates: RateDict) -> Optional[dict]:
+    """
+    Grill pricing — MS and SS are completely different models (§6 rule 11).
+
+    MS grill (§6.1): area-based = width × height × rate/sqft (leaf only).
+    SS grill (§6.2): bar-count = ((2 × height) − 2) × width × rate/RFT.
+        Uses the attached region's full dimensions (continuity model).
+    """
+    material = overlay.get("material")
+    if not material:
+        return None
+
+    w, h = region["width"], region["height"]
+
+    if material == "MS_SQUARE":
+        area = _round2(w * h)
+        rate = _lookup_rate("GRILL_MS_SQUARE", rates)
+        cost = _round2(area * rate)
+        return {
+            "label": "M.S. Square Grill",
+            "description": f"MS Grill {area} sqft × ₹{rate}/sqft",
+            "quantity": area,
+            "unit": "sqft",
+            "rate": rate,
+            "cost": cost,
+        }
+    else:
+        # SS grill: bar-count formula
+        bars = _round2((2 * h) - 2)
+        total_rft = _round2(bars * w)
+        rate = _lookup_rate(f"GRILL_{material}", rates)
+        cost = _round2(total_rft * rate)
+
+        mat_label = "SS Pipe Round" if material == "SS_PIPE_ROUND" else "SS Pipe Square"
+        return {
+            "label": f"{mat_label} Grill",
+            "description": f"{int(bars)} bars × {w}ft = {total_rft} RFT × ₹{rate}/RFT",
+            "quantity": total_rft,
+            "unit": "RFT",
+            "rate": rate,
+            "cost": cost,
+        }
+
+
+# ─── Hardware costs (§7) ──────────────────────────────────────────
+
+def _compute_hardware(region: dict, rates: RateDict) -> list[dict]:
+    """
+    Hardware pricing: per piece × quantity.
+    Hinges on shutter + door regions; locks on door regions only (V-14).
+    """
+    items = []
+    for hw in region.get("hardware", []):
+        hw_type = hw.get("hardwareType")
+        variant = hw.get("variant", "")
+        qty = hw.get("quantity", 0)
+
+        if hw_type == "hinge":
+            rate = _lookup_rate(f"HINGE_{variant}", rates)
+            cost = _round2(qty * rate)
+            items.append({
+                "label": f"Hinge ({variant.replace('_', ' ')})",
+                "description": f"{qty} × ₹{rate}/pc",
+                "quantity": qty,
+                "unit": "pc",
+                "rate": rate,
+                "cost": cost,
+            })
+        elif hw_type == "lock":
+            rate = _lookup_rate("LOCK_PROVISION", rates)
+            cost = _round2(qty * rate)
+            items.append({
+                "label": "Lock provision",
+                "description": f"{qty} × ₹{rate}/pc",
+                "quantity": qty,
+                "unit": "pc",
+                "rate": rate,
+                "cost": cost,
+            })
+
+    return items
+
+
+# ─── Region breakdown (§9.1 step 3) ───────────────────────────────
+
+def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dict]:
+    """
+    Depth-first traversal of all regions.
+    Returns a list of RegionBreakdown dicts.
+
+    For leaf regions: computes pane, infill, beading, hardware costs.
+    For all regions: computes grill overlay costs (SS grill can be on branch).
+    """
+    results = []
+    is_leaf = region.get("isLeaf", True)
+    rt = region.get("regionType", "open")
+    w, h = region["width"], region["height"]
+
+    region_bd = {
+        "region_id": str(region.get("id", "")),
+        "region_label": "",
+        "region_type": rt or "branch",
+        "dimensions": f"{w}ft × {h}ft",
+        "pane_structure": None,
+        "infill": None,
+        "beading": None,
+        "grill": None,
+        "hardware": [],
+        "subtotal": 0.0,
+    }
+
+    sub = 0.0
+
+    # 3a. Leaf-only costs: pane spec + hardware
+    if is_leaf:
+        counter[0] += 1
+        region_bd["region_label"] = f"Region {counter[0]}"
+
+        pane = _compute_pane_structure(region, rates)
+        if pane:
+            region_bd["pane_structure"] = pane
+            sub += pane["cost"]
+
+        infill = _compute_infill(region, rates)
+        if infill:
+            region_bd["infill"] = infill
+            sub += infill["cost"]
+
+        beading = _compute_beading(region, rates)
+        if beading:
+            region_bd["beading"] = beading
+            sub += beading["cost"]
+
+        hw_items = _compute_hardware(region, rates)
+        region_bd["hardware"] = hw_items
+        for hw in hw_items:
+            sub += hw["cost"]
+
+    # 3b. Grill overlay costs (leaf OR branch — SS grill continuity model)
+    for overlay in region.get("overlays", []):
+        grill = _compute_grill(overlay, region, rates)
+        if grill:
+            region_bd["grill"] = grill
+            sub += grill["cost"]
+
+    region_bd["subtotal"] = _round2(sub)
+
+    # Include if it has costs or is a leaf
+    if is_leaf or sub > 0:
+        results.append(region_bd)
+
+    # Recurse into children
+    if not is_leaf and region.get("split"):
+        for child in region["split"].get("children", []):
+            results.extend(_walk_regions(child, rates, counter))
+
+    return results
+
+
+# ─── Main pricing function (§9.1) ─────────────────────────────────
+
+def price_design(
+    tree: dict,
+    rates: RateDict,
+    discount_type: Optional[str] = None,
+    discount_value: float = 0,
+    advance_pct: float = 50,
+) -> dict:
+    """
+    Main pricing entry point. Performs full tree traversal per spec §9.1.
+
+    Args:
+        tree: Full design tree JSON (DesignTree schema).
+        rates: Dict mapping item_code → rate value.
+        discount_type: "PERCENTAGE" | "FLAT" | None.
+        discount_value: Discount amount (percent or flat ₹).
+        advance_pct: Advance percentage (default 50%).
+
+    Returns:
+        EstimateBreakdown dict with all line items, totals, GST.
+    """
+    section_size = tree["sectionSize"]
+    gauge = tree["gauge"]
+    sec_rate = _section_rate(section_size, gauge, rates)
+
+    frame = tree["frame"]
+    root_region = frame["rootRegion"]
+
+    # 1. Frame cost
+    frame_item = _compute_frame_cost(frame, sec_rate)
+
+    # 2. Collect and price all splits
+    raw_splits = _collect_splits(root_region)
+    split_items = _compute_split_costs(raw_splits, sec_rate)
+
+    # 3. Walk all regions (depth-first)
+    counter = [0]  # mutable counter for region numbering
+    region_breakdowns = _walk_regions(root_region, rates, counter)
+
+    # 4. Aggregate subtotal
+    subtotal = frame_item["cost"]
+    for s in split_items:
+        subtotal += s["cost"]
+    for r in region_breakdowns:
+        subtotal += r["subtotal"]
+    subtotal = _round2(subtotal)
+
+    # 5. Discount (PR-5)
+    discount_amount = 0.0
+    if discount_type == "PERCENTAGE" and discount_value > 0:
+        discount_amount = _round2(subtotal * discount_value / 100)
+    elif discount_type == "FLAT" and discount_value > 0:
+        discount_amount = _round2(min(discount_value, subtotal))
+
+    # 6. Taxable, GST, total
+    taxable = _round2(subtotal - discount_amount)
+    gst = _round2(taxable * 0.18)              # PR-4: 18% GST
+    grand_total = _round_rupee(taxable + gst)   # PR-3: nearest rupee
+    advance_amount = _round_rupee(grand_total * advance_pct / 100)
+
+    return {
+        "frame": frame_item,
+        "splits": split_items,
+        "regions": region_breakdowns,
+        "subtotal": subtotal,
+        "discount_type": discount_type,
+        "discount_value": _round2(discount_value),
+        "discount_amount": discount_amount,
+        "taxable": taxable,
+        "gst": gst,
+        "grand_total": grand_total,
+        "advance_pct": _round2(advance_pct),
+        "advance_amount": advance_amount,
+    }
+
+
+# ─── Default rates from spec §9.2 ─────────────────────────────────
+
+DEFAULT_RATES = [
+    {"item_code": "SECTION_5_18G",     "rate": 120, "unit": "per RFT",   "label": "Section 5\" 18G"},
+    {"item_code": "SECTION_5_16G",     "rate": 155, "unit": "per RFT",   "label": "Section 5\" 16G"},
+    {"item_code": "SECTION_6_18G",     "rate": 175, "unit": "per RFT",   "label": "Section 6\" 18G"},
+    {"item_code": "SECTION_6_16G",     "rate": 210, "unit": "per RFT",   "label": "Section 6\" 16G"},
+    {"item_code": "SECTION_10_18G",    "rate": 230, "unit": "per RFT",   "label": "Section 10\" 18G"},
+    {"item_code": "SECTION_10_16G",    "rate": 270, "unit": "per RFT",   "label": "Section 10\" 16G"},
+    {"item_code": "SHUTTER_MS_PIPE",   "rate": 100, "unit": "per RFT",   "label": "Shutter MS Pipe"},
+    {"item_code": "SHUTTER_GP_SHEET",  "rate": 250, "unit": "per RFT",   "label": "Shutter GP Sheet"},
+    {"item_code": "HINGE_SS_12G",      "rate": 120, "unit": "per piece", "label": "Hinge SS 12G"},
+    {"item_code": "HINGE_SS_10G",      "rate": 260, "unit": "per piece", "label": "Hinge SS 10G"},
+    {"item_code": "GRILL_MS_SQUARE",   "rate": 100, "unit": "per sqft",  "label": "Grill MS Square"},
+    {"item_code": "GRILL_SS_PIPE_ROUND",  "rate": 90,  "unit": "per RFT",   "label": "Grill SS Pipe Round"},
+    {"item_code": "GRILL_SS_PIPE_SQUARE", "rate": 110, "unit": "per RFT",   "label": "Grill SS Pipe Square"},
+    {"item_code": "GLASS_BEADING",     "rate": 40,  "unit": "per RFT",   "label": "Glass Beading"},
+    {"item_code": "JALI_WIRE_MESH",    "rate": 110, "unit": "per sqft",  "label": "Jali Wire Mesh"},
+    {"item_code": "LOCK_PROVISION",    "rate": 100, "unit": "per piece", "label": "Lock Provision"},
+]
