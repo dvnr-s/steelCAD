@@ -1,0 +1,353 @@
+/**
+ * Properties panel — shown on the right sidebar.
+ * When a region is selected: shows type, pane spec, grill, hardware editors.
+ * When nothing selected: shows tree-level design info.
+ */
+import { useState, useEffect } from 'react'
+import { Scissors, X, Plus, ChevronDown, Layers } from 'lucide-react'
+import useEditorStore from '../store/editorStore'
+
+const REGION_TYPES = [
+  { value: 'open',    label: 'Open', color: '#8b949e' },
+  { value: 'fixed',   label: 'Fixed', color: '#22c55e' },
+  { value: 'shutter', label: 'Shutter', color: '#f59e0b' },
+  { value: 'door',    label: 'Door', color: '#ef4444' },
+  { value: 'louver',  label: 'Louver', color: '#8b5cf6' },
+]
+
+function findRegion(region, id) {
+  if (region.id === id) return region
+  if (region.split) {
+    for (const child of region.split.children) {
+      const found = findRegion(child, id)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+function SplitControls({ regionId }) {
+  const [dir, setDir] = useState('vertical')
+  const [pos, setPos] = useState(50)
+  const splitRegion = useEditorStore((s) => s.splitRegion)
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="flex gap-2">
+        <button
+          className={`btn btn-sm w-full ${dir === 'vertical' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setDir('vertical')}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <rect x="1" y="1" width="12" height="12" rx="1" stroke="currentColor" strokeWidth="1.5" />
+            <line x1="7" y1="1" x2="7" y2="13" stroke="currentColor" strokeWidth="1.5" />
+          </svg>
+          Vertical
+        </button>
+        <button
+          className={`btn btn-sm w-full ${dir === 'horizontal' ? 'btn-primary' : 'btn-secondary'}`}
+          onClick={() => setDir('horizontal')}
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <rect x="1" y="1" width="12" height="12" rx="1" stroke="currentColor" strokeWidth="1.5" />
+            <line x1="1" y1="7" x2="13" y2="7" stroke="currentColor" strokeWidth="1.5" />
+          </svg>
+          Horizontal
+        </button>
+      </div>
+      <div className="form-group">
+        <label>Position: {pos}%</label>
+        <input type="range" min="20" max="80" value={pos} onChange={(e) => setPos(+e.target.value)}
+          style={{ padding: 0, height: 4, cursor: 'pointer' }} />
+      </div>
+      <button className="btn btn-primary btn-sm w-full"
+        onClick={() => splitRegion(regionId, dir, pos / 100)}>
+        <Scissors size={14} /> Split Region
+      </button>
+    </div>
+  )
+}
+
+function PaneSpecEditor({ region }) {
+  const updateRegion = useEditorStore((s) => s.updateRegion)
+  const ps = region.paneSpec || { shutterMaterial: null, infillType: 'none', hasBeading: false }
+  const rt = region.regionType
+
+  const update = (patch) =>
+    updateRegion(region.id, { paneSpec: { ...ps, ...patch } })
+
+  const needsShutterMat = rt === 'shutter' || rt === 'door'
+  const canHaveInfill = rt !== 'door' && rt !== 'open' && rt !== 'louver'
+
+  if (rt === 'open' || rt === 'louver') {
+    return <p className="text-xs text-muted">No pane spec for {rt} regions</p>
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {needsShutterMat && (
+        <div className="form-group">
+          <label>Shutter Material</label>
+          <select value={ps.shutterMaterial || ''} onChange={(e) => update({ shutterMaterial: e.target.value || null })}>
+            <option value="">Select...</option>
+            <option value="MS_PIPE">MS Pipe</option>
+            <option value="GP_SHEET">GP Sheet</option>
+          </select>
+        </div>
+      )}
+      {canHaveInfill && (
+        <div className="form-group">
+          <label>Infill</label>
+          <select value={ps.infillType || 'none'} onChange={(e) => update({ infillType: e.target.value })}>
+            <option value="none">None</option>
+            <option value="glass">Glass</option>
+            <option value="jali">Jali</option>
+          </select>
+        </div>
+      )}
+      {canHaveInfill && ps.infillType !== 'none' && (
+        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.875rem' }}>
+          <input type="checkbox" checked={ps.hasBeading || false}
+            onChange={(e) => update({ hasBeading: e.target.checked })} />
+          Add Beading
+        </label>
+      )}
+    </div>
+  )
+}
+
+function GrillEditor({ region }) {
+  const updateRegion = useEditorStore((s) => s.updateRegion)
+  const overlays = region.overlays || []
+  const grill = overlays.find((o) => o.overlayType === 'grill')
+
+  const setGrill = (material) => {
+    if (!material) {
+      updateRegion(region.id, { overlays: [] })
+    } else {
+      updateRegion(region.id, {
+        overlays: [{
+          id: crypto.randomUUID(),
+          type: 'overlay',
+          overlayType: 'grill',
+          material,
+        }],
+      })
+    }
+  }
+
+  // MS grill only on leaves
+  const showMS = region.isLeaf
+
+  return (
+    <div className="form-group">
+      <label>Grill Type</label>
+      <select value={grill?.material || ''} onChange={(e) => setGrill(e.target.value || null)}>
+        <option value="">No Grill</option>
+        {showMS && <option value="MS_SQUARE">MS Square</option>}
+        <option value="SS_PIPE_ROUND">SS Pipe Round</option>
+        <option value="SS_PIPE_SQUARE">SS Pipe Square</option>
+      </select>
+    </div>
+  )
+}
+
+function HardwareEditor({ region }) {
+  const updateRegion = useEditorStore((s) => s.updateRegion)
+  const hardware = region.hardware || []
+  const rt = region.regionType
+
+  if (rt !== 'shutter' && rt !== 'door') {
+    return <p className="text-xs text-muted">Hardware only on shutter/door regions</p>
+  }
+
+  const addHinge = () => {
+    updateRegion(region.id, {
+      hardware: [
+        ...hardware,
+        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: 2, autoComputed: false },
+      ],
+    })
+  }
+
+  const addLock = () => {
+    if (rt !== 'door') return
+    updateRegion(region.id, {
+      hardware: [
+        ...hardware,
+        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'lock', variant: 'standard', quantity: 1, autoComputed: false },
+      ],
+    })
+  }
+
+  const removeHw = (id) =>
+    updateRegion(region.id, { hardware: hardware.filter((h) => h.id !== id) })
+
+  const updateHw = (id, patch) =>
+    updateRegion(region.id, { hardware: hardware.map((h) => h.id === id ? { ...h, ...patch } : h) })
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {hardware.map((hw) => (
+        <div key={hw.id} className="flex items-center gap-2" style={{
+          background: 'var(--c-surface-2)',
+          border: '1px solid var(--c-border)',
+          borderRadius: 'var(--radius)',
+          padding: '6px 8px',
+        }}>
+          <span className="text-xs text-muted" style={{ flex: 1 }}>{hw.hardwareType}</span>
+          {hw.hardwareType === 'hinge' && (
+            <select
+              style={{ width: 100, fontSize: '0.75rem', padding: '2px 6px' }}
+              value={hw.variant}
+              onChange={(e) => updateHw(hw.id, { variant: e.target.value })}
+            >
+              <option value="SS_12G">SS 12G</option>
+              <option value="SS_10G">SS 10G</option>
+            </select>
+          )}
+          <input
+            type="number" min="1" max="10"
+            value={hw.quantity}
+            onChange={(e) => updateHw(hw.id, { quantity: +e.target.value })}
+            style={{ width: 44, fontSize: '0.75rem', padding: '2px 6px' }}
+          />
+          <button className="btn btn-ghost btn-icon" style={{ padding: 2 }}
+            onClick={() => removeHw(hw.id)}>
+            <X size={12} color="var(--c-error)" />
+          </button>
+        </div>
+      ))}
+      <div className="flex gap-2">
+        <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={addHinge}>
+          <Plus size={12} /> Hinge
+        </button>
+        {rt === 'door' && (
+          <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={addLock}>
+            <Plus size={12} /> Lock
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export default function PropertiesPanel() {
+  const tree = useEditorStore((s) => s.tree)
+  const selectedId = useEditorStore((s) => s.selectedId)
+  const updateRegion = useEditorStore((s) => s.updateRegion)
+  const splitRegion = useEditorStore((s) => s.splitRegion)
+  const collapseRegion = useEditorStore((s) => s.collapseRegion)
+  const deselect = useEditorStore((s) => s.deselect)
+
+  if (!tree) return null
+
+  const selected = selectedId ? findRegion(tree.frame.rootRegion, selectedId) : null
+
+  if (!selected) {
+    return (
+      <div>
+        <div className="panel-section">
+          <div className="panel-title">Design Info</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.875rem' }}>
+            <div className="flex justify-between">
+              <span className="text-muted">Width</span>
+              <span className="font-mono">{tree.outerWidth}ft</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted">Height</span>
+              <span className="font-mono">{tree.outerHeight}ft</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted">Section</span>
+              <span className="font-mono">{tree.sectionSize}" {tree.gauge}</span>
+            </div>
+          </div>
+        </div>
+        <div className="panel-section">
+          <p className="text-xs text-muted" style={{ lineHeight: 1.6 }}>
+            Click a region on the canvas to select it and edit its properties.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="panel-section">
+        <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
+          <div className="panel-title">Selected Region</div>
+          <button className="btn btn-ghost btn-icon" style={{ padding: 2 }} onClick={deselect}>
+            <X size={14} />
+          </button>
+        </div>
+        <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-muted)', fontFamily: 'var(--font-mono)' }}>
+          {selected.width}ft × {selected.height}ft
+        </div>
+      </div>
+
+      {/* Region Type (leaf only) */}
+      {selected.isLeaf && (
+        <div className="panel-section">
+          <div className="panel-title">Type</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            {REGION_TYPES.map((rt) => (
+              <button
+                key={rt.value}
+                className={`btn btn-sm ${selected.regionType === rt.value ? 'btn-primary' : 'btn-secondary'}`}
+                style={selected.regionType === rt.value ? {} : { borderColor: rt.color + '44', color: rt.color }}
+                onClick={() => updateRegion(selected.id, { regionType: rt.value, paneSpec: null, hardware: [] })}
+              >
+                {rt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Pane Spec */}
+      {selected.isLeaf && selected.regionType && (
+        <div className="panel-section">
+          <div className="panel-title">Pane</div>
+          <PaneSpecEditor region={selected} />
+        </div>
+      )}
+
+      {/* Grill */}
+      <div className="panel-section">
+        <div className="panel-title">Grill</div>
+        <GrillEditor region={selected} />
+      </div>
+
+      {/* Hardware */}
+      {selected.isLeaf && (
+        <div className="panel-section">
+          <div className="panel-title">Hardware</div>
+          <HardwareEditor region={selected} />
+        </div>
+      )}
+
+      {/* Split */}
+      {selected.isLeaf && (
+        <div className="panel-section">
+          <div className="panel-title">Split Region</div>
+          <SplitControls regionId={selected.id} />
+        </div>
+      )}
+
+      {/* Collapse (branch only) */}
+      {!selected.isLeaf && (
+        <div className="panel-section">
+          <button
+            className="btn btn-danger btn-sm w-full"
+            onClick={() => collapseRegion(selected.id)}
+          >
+            <X size={14} /> Remove Split
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
