@@ -3,7 +3,6 @@
  * Owns the canvas tree, selection, and live pricing preview.
  */
 import { create } from 'zustand'
-import { v4 as uuid } from 'crypto'
 
 // A fresh empty leaf region at given dims
 export const makeLeafRegion = (x, y, w, h) => ({

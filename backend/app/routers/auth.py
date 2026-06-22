@@ -91,3 +91,38 @@ async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserResponse, summary="Get current authenticated user")
 async def get_me(user: User = Depends(get_current_user)):
     return user
+
+
+@router.post(
+    "/bootstrap-admin",
+    summary="Promote a user to admin — only works if NO admin exists yet (first-run only)",
+)
+async def bootstrap_admin(
+    data: dict,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    One-time bootstrap: makes the specified email an admin.
+    Only succeeds if there are currently zero admins in the system.
+    Safe to call multiple times — becomes a no-op once any admin exists.
+    """
+    # Refuse if an admin already exists
+    existing_admin = await db.execute(select(User).where(User.is_admin == True))
+    if existing_admin.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="An admin already exists. This endpoint is disabled.",
+        )
+
+    email = data.get("email", "").strip()
+    if not email:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="email required")
+
+    result = await db.execute(select(User).where(User.email == email))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    user.is_admin = True
+    await db.flush()
+    return {"message": f"{email} is now an admin"}
