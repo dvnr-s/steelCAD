@@ -5,8 +5,10 @@ import useAuthStore from './store/authStore'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import DashboardPage from './pages/DashboardPage'
+import CustomersPage from './pages/CustomersPage'
+import CustomerDetailPage from './pages/CustomerDetailPage'
+import EstimateBuilderPage from './pages/EstimateBuilderPage'
 import EditorPage from './pages/EditorPage'
-import EstimatePage from './pages/EstimatePage'
 import RatesPage from './pages/RatesPage'
 
 function ProtectedRoute({ children }) {
@@ -47,10 +49,12 @@ export default function App() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
-        <Route path="/" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
-        <Route path="/designs/new" element={<ProtectedRoute><EditorPage /></ProtectedRoute>} />
+        <Route path="/" element={<ProtectedRoute><CustomersPage /></ProtectedRoute>} />
+        <Route path="/customers/:id" element={<ProtectedRoute><CustomerDetailPage /></ProtectedRoute>} />
+        <Route path="/estimates/:id" element={<ProtectedRoute><EstimateBuilderPage /></ProtectedRoute>} />
+        <Route path="/estimates/:estimateId/frames/:frameId" element={<ProtectedRoute><EditorPage /></ProtectedRoute>} />
+        <Route path="/designs" element={<ProtectedRoute><DashboardPage /></ProtectedRoute>} />
         <Route path="/designs/:id" element={<ProtectedRoute><EditorPage /></ProtectedRoute>} />
-        <Route path="/estimates/:id" element={<ProtectedRoute><EstimatePage /></ProtectedRoute>} />
         <Route path="/rates" element={<AdminRoute><RatesPage /></AdminRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

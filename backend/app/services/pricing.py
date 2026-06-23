@@ -22,6 +22,11 @@ from typing import Optional
 # Type alias for rate dictionary
 RateDict = dict[str, float]
 
+# Interior partition members (mullions/transoms) are double sections — two lengths
+# of the profile run back-to-back to divide the unit — so they cost 2× the section
+# rate per RFT versus the single-run outer frame.
+MULLION_RATE_MULTIPLIER = 2
+
 
 # ─── Rounding helpers ──────────────────────────────────────────────
 
@@ -100,17 +105,23 @@ def _collect_splits(region: dict) -> list[dict]:
 
 
 def _compute_split_costs(splits: list[dict], rate: float) -> list[dict]:
-    """Convert collected splits into priced line items. All splits share the frame's section rate."""
+    """
+    Convert collected splits into priced line items.
+
+    Mullions/transoms are partition members priced at 2× the section rate per RFT
+    (MULLION_RATE_MULTIPLIER) because they are double sections — see the constant.
+    """
+    eff_rate = _round2(rate * MULLION_RATE_MULTIPLIER)
     items = []
     for s in splits:
         length = s["length"]
-        cost = _round2(length * rate)
+        cost = _round2(length * eff_rate)
         items.append({
             "label": s["label"],
-            "description": f"{s['label']} {length} RFT × ₹{rate}/RFT",
+            "description": f"{s['label']} {length} RFT × ₹{eff_rate}/RFT (double section)",
             "quantity": length,
             "unit": "RFT",
-            "rate": rate,
+            "rate": eff_rate,
             "cost": cost,
         })
     return items
@@ -447,6 +458,84 @@ def price_design(
         "grand_total": grand_total,
         "advance_pct": _round2(advance_pct),
         "advance_amount": advance_amount,
+    }
+
+
+# ─── Estimate aggregation (multi-frame) ───────────────────────────
+
+def _apply_commercial_terms(
+    subtotal: float,
+    discount_type: Optional[str],
+    discount_value: float,
+    advance_pct: float,
+) -> dict:
+    """Apply discount → GST (18%) → grand total → advance to a subtotal."""
+    discount_amount = 0.0
+    if discount_type == "PERCENTAGE" and discount_value > 0:
+        discount_amount = _round2(subtotal * discount_value / 100)
+    elif discount_type == "FLAT" and discount_value > 0:
+        discount_amount = _round2(min(discount_value, subtotal))
+
+    taxable = _round2(subtotal - discount_amount)
+    gst = _round2(taxable * 0.18)
+    grand_total = _round_rupee(taxable + gst)
+    advance_amount = _round_rupee(grand_total * advance_pct / 100)
+    return {
+        "discount_amount": discount_amount,
+        "taxable": taxable,
+        "gst": gst,
+        "grand_total": grand_total,
+        "advance_amount": advance_amount,
+    }
+
+
+def price_estimate(
+    frames: list[dict],
+    rates: RateDict,
+    discount_type: Optional[str] = None,
+    discount_value: float = 0,
+    advance_pct: float = 50,
+) -> dict:
+    """
+    Price a multi-frame estimate.
+
+    Each frame is priced as a single unit (its own full breakdown, with no
+    per-frame discount/GST), then multiplied by its quantity. Estimate-level
+    discount, GST, and advance are applied once to the aggregate.
+
+    Args:
+        frames: list of {name, quantity, tree} dicts.
+        rates: item_code → rate.
+    """
+    frame_lines = []
+    subtotal = 0.0
+    for f in frames:
+        tree = f["tree"]
+        qty = int(f.get("quantity", 1) or 1)
+        unit = price_design(tree, rates, discount_type=None, discount_value=0, advance_pct=0)
+        unit_subtotal = unit["subtotal"]
+        line_total = _round2(unit_subtotal * qty)
+        subtotal += line_total
+        frame_lines.append({
+            "name": f.get("name", "Frame"),
+            "dimensions": f"{tree['frame']['width']}ft × {tree['frame']['height']}ft",
+            "section": f"{tree.get('sectionSize', '')}\" {tree.get('gauge', '')}".strip(),
+            "quantity": qty,
+            "unit_subtotal": unit_subtotal,
+            "line_total": line_total,
+            "breakdown": unit,
+        })
+
+    subtotal = _round2(subtotal)
+    terms = _apply_commercial_terms(subtotal, discount_type, discount_value, advance_pct)
+
+    return {
+        "frames": frame_lines,
+        "subtotal": subtotal,
+        "discount_type": discount_type,
+        "discount_value": _round2(discount_value),
+        "advance_pct": _round2(advance_pct),
+        **terms,
     }
 
 

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, LogOut, Settings, Trash2, Pencil, BarChart3, Clock } from 'lucide-react'
+import { Plus, Trash2, BarChart3, Clock } from 'lucide-react'
 import toast from 'react-hot-toast'
-import useAuthStore from '../store/authStore'
 import { designsApi } from '../api/client'
 import NewDesignModal from '../components/NewDesignModal'
+import TopNav from '../components/TopNav'
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -74,8 +74,6 @@ function DesignCard({ design, onDelete, onOpen }) {
 }
 
 export default function DashboardPage() {
-  const user = useAuthStore((s) => s.user)
-  const logout = useAuthStore((s) => s.logout)
   const navigate = useNavigate()
 
   const [designs, setDesigns] = useState([])
@@ -95,54 +93,17 @@ export default function DashboardPage() {
 
   useEffect(() => { loadDesigns() }, [])
 
-  const handleLogout = () => { logout(); navigate('/login') }
-
   return (
     <div className="dashboard-layout">
-      {/* Nav */}
-      <nav className="dashboard-nav">
-        <div className="flex items-center gap-3">
-          <div style={{
-            width: 32, height: 32, background: 'var(--c-brand)',
-            borderRadius: 7, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>
-            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="#fff" strokeWidth={2.5}>
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <path d="M3 9h18M9 21V9" />
-            </svg>
-          </div>
-          <span style={{ fontWeight: 800, fontSize: '1.1rem', letterSpacing: '-0.02em' }}>SteelCAD</span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {user?.is_admin && (
-            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/rates')}>
-              <Settings size={15} /> Manage Rates
-            </button>
-          )}
-          <div style={{
-            padding: '4px 10px',
-            background: 'var(--c-surface-2)',
-            border: '1px solid var(--c-border)',
-            borderRadius: 'var(--radius)',
-            fontSize: '0.875rem',
-          }}>
-            {user?.name}
-            {user?.is_admin && <span className="badge badge-accent" style={{ marginLeft: 6 }}>Admin</span>}
-          </div>
-          <button className="btn btn-ghost btn-sm btn-icon" onClick={handleLogout} title="Logout">
-            <LogOut size={16} />
-          </button>
-        </div>
-      </nav>
+      <TopNav />
 
       {/* Main */}
       <main className="dashboard-main">
         {/* Header */}
         <div className="flex items-center justify-between" style={{ marginBottom: 28 }}>
           <div>
-            <h1 style={{ marginBottom: 4 }}>Designs</h1>
-            <p>All steel window & door designs — {designs.length} total</p>
+            <h1 style={{ marginBottom: 4 }}>Design Library</h1>
+            <p>Reusable window & door designs — {designs.length} total. Add these to customer estimates as frames.</p>
           </div>
           <button className="btn btn-primary" onClick={() => setShowNewModal(true)}>
             <Plus size={16} /> New Design

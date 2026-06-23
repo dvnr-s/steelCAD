@@ -175,10 +175,12 @@ def test_spec_example_5x4_split():
     # Frame: 2×(5+4) = 18 RFT × 120 = ₹2,160
     assert result["frame"]["cost"] == 2160.0
 
-    # One vertical split (mullion): length = 4ft × 120 = ₹480
+    # One vertical split (mullion): partition member = double section.
+    # length 4ft × (₹120 × 2) = ₹960
     assert len(result["splits"]) == 1
     assert result["splits"][0]["quantity"] == 4.0
-    assert result["splits"][0]["cost"] == 480.0
+    assert result["splits"][0]["rate"] == 240.0
+    assert result["splits"][0]["cost"] == 960.0
 
     # Left panel (fixed, glass + beading + MS grill):
     left = result["regions"][0]
@@ -204,8 +206,8 @@ def test_spec_example_5x4_split():
     # Right subtotal: 1200 + 480 + 240 = ₹1,920
     assert right["subtotal"] == 1920.0
 
-    # Total: frame(2160) + split(480) + left(1760) + right(1920) = ₹6,320
-    assert result["subtotal"] == 6320.0
+    # Total: frame(2160) + split(960) + left(1760) + right(1920) = ₹6,800
+    assert result["subtotal"] == 6800.0
 
 
 # ═══════════════════════════════════════════════════════════════════

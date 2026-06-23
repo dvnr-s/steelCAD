@@ -429,7 +429,8 @@ This taxonomy prevents confusion:
 
 | Category | Examples | Structural? | Priced by | Scope |
 |----------|----------|:-----------:|-----------|-------|
-| **Structure** | Frame, Split/Mullion/Transom | Yes | Running feet × section rate | Design-level |
+| **Structure (frame)** | Outer frame | Yes | Running feet × section rate | Design-level |
+| **Structure (partition)** | Split / Mullion / Transom | Yes | Running feet × section rate × 2 (double section) | Design-level |
 | **Region Type** | open, fixed, shutter, door, louver | — | — (defines semantics) | Per leaf region |
 | **Pane Structure** | Shutter/door frame (MS pipe, GP sheet) | No | Running feet × shutter rate | Per shutter/door region |
 | **Pane Infill** | glass (₹0), jali (area-based) | No | Area or ₹0 | Per region with infill |
@@ -465,10 +466,11 @@ function priceDesign(tree):
     breakdown.frame = { rf: frameRF, rate: sectionRate, cost: frameRF × sectionRate }
     
     # 2. Walk all splits → split/mullion/transom cost
-    #    All splits use the same sectionRate as the frame (no overrides)
+    #    Partition members are DOUBLE sections → priced at 2 × sectionRate per RFT.
+    mullionRate = sectionRate × 2
     for each split in tree (depth-first):
         splitLength = (split.direction == "vertical") ? parentRegion.height : parentRegion.width
-        breakdown.splits.append({ length: splitLength, rate: sectionRate, cost: splitLength × sectionRate })
+        breakdown.splits.append({ length: splitLength, rate: mullionRate, cost: splitLength × mullionRate })
     
     # 3. Walk ALL regions (depth-first)
     for each region in tree (depth-first):

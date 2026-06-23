@@ -1,5 +1,8 @@
 """
-Estimate-related Pydantic schemas — request, breakdown line items, response.
+Estimate-related Pydantic schemas.
+
+Hierarchy: Customer → Estimate → EstimateFrame (one geometry per frame, × qty).
+Estimate-level discount/GST/advance apply to the aggregate of frame line totals.
 """
 from datetime import datetime
 from typing import Literal, Optional
@@ -8,19 +11,9 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 
-# ─── Request ────────────────────────────────────────────────────────
-
-class EstimateRequest(BaseModel):
-    """Parameters for generating an estimate from a saved design."""
-    discount_type: Optional[Literal["PERCENTAGE", "FLAT"]] = None
-    discount_value: float = Field(default=0, ge=0)
-    advance_pct: float = Field(default=50, ge=0, le=100)
-
-
-# ─── Breakdown sub-schemas ──────────────────────────────────────────
+# ─── Per-unit breakdown sub-schemas (output of the pricing engine) ──
 
 class LineItem(BaseModel):
-    """A single priced line in the estimate breakdown."""
     label: str
     description: str
     quantity: float
@@ -30,7 +23,6 @@ class LineItem(BaseModel):
 
 
 class RegionBreakdown(BaseModel):
-    """Cost breakdown for one region."""
     region_id: str
     region_label: str
     region_type: str
@@ -43,41 +35,119 @@ class RegionBreakdown(BaseModel):
     subtotal: float
 
 
-class EstimateBreakdown(BaseModel):
-    """Full itemized estimate breakdown."""
+class UnitBreakdown(BaseModel):
+    """Full itemized breakdown for a single unit (one frame)."""
     frame: LineItem
     splits: list[LineItem]
     regions: list[RegionBreakdown]
     subtotal: float
-    discount_type: Optional[str] = None
-    discount_value: float = 0
-    discount_amount: float = 0
-    taxable: float
-    gst: float
-    grand_total: int
-    advance_pct: float
-    advance_amount: float
 
 
-# ─── Response ───────────────────────────────────────────────────────
+# ─── Stateless price preview (used by the canvas live price) ────────
 
-class EstimateResponse(BaseModel):
-    """Full estimate with breakdown and rate snapshot."""
+class PriceRequest(BaseModel):
+    tree_json: dict
+
+
+# ─── Frames ─────────────────────────────────────────────────────────
+
+class FrameInput(BaseModel):
+    """Add/replace a frame. Provide either source_design_id (copy from library)
+    or tree_json (a one-off design). quantity defaults to 1."""
+    name: Optional[str] = None
+    quantity: int = Field(default=1, ge=1)
+    source_design_id: Optional[UUID] = None
+    tree_json: Optional[dict] = None
+
+
+class FrameUpdate(BaseModel):
+    name: Optional[str] = None
+    quantity: Optional[int] = Field(default=None, ge=1)
+    tree_json: Optional[dict] = None
+
+
+class FrameDetail(BaseModel):
     id: UUID
-    design_id: UUID
-    version_number: int
-    breakdown: EstimateBreakdown
-    rate_snapshot: dict
-    created_at: datetime
+    name: str
+    quantity: int
+    outer_width: float
+    outer_height: float
+    section_size: str
+    gauge: str
+    tree_json: dict
+    unit_subtotal: float
+    line_total: float
+    unit_breakdown: dict
+    source_design_id: Optional[UUID] = None
+    sort_order: int
 
     model_config = {"from_attributes": True}
 
 
-class EstimateListItem(BaseModel):
-    """Compact estimate summary for list view."""
+# ─── Estimates ──────────────────────────────────────────────────────
+
+class EstimateCreate(BaseModel):
+    title: Optional[str] = None
+    notes: Optional[str] = None
+    discount_type: Optional[Literal["PERCENTAGE", "FLAT"]] = None
+    discount_value: float = Field(default=0, ge=0)
+    advance_pct: float = Field(default=50, ge=0, le=100)
+
+
+class EstimateUpdate(BaseModel):
+    title: Optional[str] = None
+    notes: Optional[str] = None
+    status: Optional[Literal["draft", "final"]] = None
+    discount_type: Optional[Literal["PERCENTAGE", "FLAT"]] = None
+    discount_value: Optional[float] = Field(default=None, ge=0)
+    advance_pct: Optional[float] = Field(default=None, ge=0, le=100)
+
+
+class CustomerBrief(BaseModel):
     id: UUID
-    version_number: int
+    name: str
+    company: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    gstin: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class EstimateDetail(BaseModel):
+    id: UUID
+    number: int
+    title: Optional[str] = None
+    notes: Optional[str] = None
+    status: str
+    customer: CustomerBrief
+    discount_type: Optional[str] = None
+    discount_value: float
+    advance_pct: float
+    frames: list[FrameDetail]
+    subtotal: float
+    discount_amount: float
+    taxable: float
+    gst: float
+    grand_total: int
+    advance_amount: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class EstimateSummary(BaseModel):
+    id: UUID
+    number: int
+    title: Optional[str] = None
+    status: str
+    customer_id: UUID
+    customer_name: str
+    frame_count: int
     grand_total: int
     created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}

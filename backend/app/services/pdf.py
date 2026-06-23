@@ -1,7 +1,7 @@
 """
-PDF generation service — renders estimate breakdown as a professional PDF using WeasyPrint.
+PDF generation — renders a multi-frame estimate as a professional quotation
+PDF using WeasyPrint.
 """
-import io
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,41 +10,65 @@ from jinja2 import Environment, FileSystemLoader
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 
 
-def generate_estimate_pdf(
-    design_name: str,
-    design_dims: str,
-    section_info: str,
-    breakdown: dict,
-    rate_snapshot: dict,
-    version_number: int,
-    created_at: datetime,
-) -> bytes:
-    """
-    Render the estimate breakdown as a styled PDF.
+def _fmt(value: float) -> str:
+    """Format a number as Indian-grouped currency string (no symbol)."""
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "0.00"
 
-    Returns raw PDF bytes.
+
+def generate_estimate_pdf(estimate) -> bytes:
     """
-    # Import WeasyPrint here so the module can be imported even if WeasyPrint is not installed
-    # (useful for tests that don't need PDF functionality)
+    Render an Estimate (ORM object, with .customer and .frames loaded) to PDF bytes.
+    """
     from weasyprint import HTML
 
     env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)))
+    env.filters["money"] = _fmt
     template = env.get_template("estimate_pdf.html")
 
+    customer = estimate.customer
+    frames = [
+        {
+            "name": f.name,
+            "dimensions": f"{float(f.outer_width)}ft × {float(f.outer_height)}ft",
+            "section": f'{f.section_size}" {f.gauge}',
+            "quantity": f.quantity,
+            "unit_subtotal": float(f.unit_subtotal or 0),
+            "line_total": float(f.line_total or 0),
+            "breakdown": f.unit_breakdown or {},
+        }
+        for f in estimate.frames
+    ]
+
     html_content = template.render(
-        design_name=design_name,
-        design_dims=design_dims,
-        section_info=section_info,
-        breakdown=breakdown,
-        rate_snapshot=rate_snapshot,
-        version_number=version_number,
-        created_at=(
-            created_at.strftime("%d %b %Y, %I:%M %p")
-            if created_at
-            else ""
-        ),
+        estimate={
+            "number": estimate.number,
+            "title": estimate.title or "",
+            "notes": estimate.notes or "",
+            "status": estimate.status,
+            "discount_type": estimate.discount_type,
+            "discount_value": float(estimate.discount_value or 0),
+            "discount_amount": float(estimate.discount_amount or 0),
+            "subtotal": float(estimate.subtotal or 0),
+            "taxable": float(estimate.taxable or 0),
+            "gst": float(estimate.gst or 0),
+            "grand_total": int(estimate.grand_total or 0),
+            "advance_pct": float(estimate.advance_pct or 0),
+            "advance_amount": int(estimate.advance_amount or 0),
+        },
+        customer={
+            "name": customer.name,
+            "company": customer.company or "",
+            "phone": customer.phone or "",
+            "email": customer.email or "",
+            "address": customer.address or "",
+            "gstin": customer.gstin or "",
+        },
+        frames=frames,
+        created_at=estimate.created_at.strftime("%d %b %Y") if estimate.created_at else "",
         generated_at=datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC"),
     )
 
-    pdf_bytes = HTML(string=html_content).write_pdf()
-    return pdf_bytes
+    return HTML(string=html_content).write_pdf()

@@ -35,6 +35,87 @@ export const makeEmptyTree = (name, width, height, sectionSize = '5', gauge = '1
   },
 })
 
+// Max number of undo steps retained in memory.
+const HISTORY_LIMIT = 50
+
+// Layout / snapping constants (in feet).
+export const GRID = 0.25      // 3-inch snap increment
+export const MIN_SIDE = 0.5   // smallest allowed region edge
+const FRAME_MIN = 1
+const FRAME_MAX = 30
+
+/**
+ * Snap a split's offset to the grid and clamp it so each side keeps MIN_SIDE.
+ * `size` is the parent region's length along the split axis (ft); `position`
+ * is the desired ratio (0..1). Returns the snapped/clamped ratio.
+ */
+export function snapOffset(size, position) {
+  if (size <= 2 * MIN_SIDE) return 0.5
+  let offset = Math.round((size * position) / GRID) * GRID
+  offset = Math.max(MIN_SIDE, Math.min(size - MIN_SIDE, offset))
+  return offset / size
+}
+
+const snapFrame = (v) => Math.max(FRAME_MIN, Math.min(FRAME_MAX, Math.round(v / GRID) * GRID))
+
+/** Find a region node by id within a region subtree. */
+export function findRegionNode(region, id) {
+  if (region.id === id) return region
+  if (region.split) {
+    for (const c of region.split.children) {
+      const found = findRegionNode(c, id)
+      if (found) return found
+    }
+  }
+  return null
+}
+
+/**
+ * Re-derive x/y/width/height for every region from the frame size and each
+ * split's position. This is the single source of truth for geometry — any
+ * drag just updates a split position (or the frame size) and calls relayout.
+ */
+export function relayout(tree) {
+  if (!tree?.frame) return tree
+  const root = _layoutRegion(tree.frame.rootRegion, 0, 0, tree.frame.width, tree.frame.height)
+  return { ...tree, frame: { ...tree.frame, rootRegion: root } }
+}
+
+function _layoutRegion(region, x, y, w, h) {
+  const base = { ...region, x, y, width: w, height: h }
+  if (region.isLeaf || !region.split) return base
+  const { direction, position } = region.split
+  const [a, b] = region.split.children
+  let ca, cb
+  if (direction === 'vertical') {
+    ca = _layoutRegion(a, x, y, w * position, h)
+    cb = _layoutRegion(b, x + w * position, y, w * (1 - position), h)
+  } else {
+    ca = _layoutRegion(a, x, y, w, h * position)
+    cb = _layoutRegion(b, x, y + h * position, w, h * (1 - position))
+  }
+  return { ...base, split: { ...region.split, children: [ca, cb] } }
+}
+
+/** Immutably apply `fn` to the region matching `regionId`. */
+function _mapRegionInTree(tree, regionId, fn) {
+  return {
+    ...tree,
+    frame: { ...tree.frame, rootRegion: _mapRegionNode(tree.frame.rootRegion, regionId, fn) },
+  }
+}
+
+function _mapRegionNode(region, id, fn) {
+  if (region.id === id) return fn(region)
+  if (region.split) {
+    return {
+      ...region,
+      split: { ...region.split, children: region.split.children.map((c) => _mapRegionNode(c, id, fn)) },
+    }
+  }
+  return region
+}
+
 const useEditorStore = create((set, get) => ({
   // The active design tree (DesignTree schema)
   tree: null,
@@ -42,24 +123,77 @@ const useEditorStore = create((set, get) => ({
   designName: '',
   isDirty: false,
 
+  // Undo/redo history — snapshots of the tree before each mutation.
+  past: [],
+  future: [],
+
   // Selection
   selectedId: null,
+
+  // Active canvas tool: null | 'vertical' | 'horizontal' (drag-to-add mullion)
+  addMode: null,
+  setAddMode: (addMode) => set({ addMode }),
+
+  // Snapshot taken at the start of a drag, used to record one undo step on release.
+  _snapshot: null,
 
   // Live pricing from backend (null = not loaded yet)
   livePrice: null,
 
   // ─── Tree management ────────────────────────────────────
   initTree: (designId, tree) =>
-    set({ tree, designId, designName: tree.name, isDirty: false, selectedId: null }),
+    set({ tree, designId, designName: tree.name, isDirty: false, selectedId: null, past: [], future: [] }),
 
   newTree: (name, width, height, sectionSize, gauge) => {
     const tree = makeEmptyTree(name, width, height, sectionSize, gauge)
-    set({ tree, designId: null, designName: name, isDirty: true, selectedId: null })
+    set({ tree, designId: null, designName: name, isDirty: true, selectedId: null, past: [], future: [] })
   },
 
   setTree: (tree) => set({ tree, isDirty: true }),
 
   markSaved: (designId) => set({ designId, isDirty: false }),
+
+  /**
+   * Commit a new tree, pushing the current one onto the undo stack and
+   * clearing the redo stack. All mutating actions route through this.
+   */
+  _commit: (newTree, extra = {}) => {
+    const { tree, past } = get()
+    set({
+      tree: newTree,
+      past: tree ? [...past, tree].slice(-HISTORY_LIMIT) : past,
+      future: [],
+      isDirty: true,
+      ...extra,
+    })
+  },
+
+  // ─── Undo / redo ────────────────────────────────────────
+  undo: () => {
+    const { past, future, tree } = get()
+    if (past.length === 0) return
+    const previous = past[past.length - 1]
+    set({
+      tree: previous,
+      past: past.slice(0, -1),
+      future: tree ? [tree, ...future].slice(0, HISTORY_LIMIT) : future,
+      isDirty: true,
+      selectedId: null,
+    })
+  },
+
+  redo: () => {
+    const { past, future, tree } = get()
+    if (future.length === 0) return
+    const next = future[0]
+    set({
+      tree: next,
+      past: tree ? [...past, tree].slice(-HISTORY_LIMIT) : past,
+      future: future.slice(1),
+      isDirty: true,
+      selectedId: null,
+    })
+  },
 
   // ─── Selection ──────────────────────────────────────────
   select: (id) => set({ selectedId: id }),
@@ -71,10 +205,68 @@ const useEditorStore = create((set, get) => ({
    * Split a region by ID. direction = 'vertical' | 'horizontal', position = 0..1
    */
   splitRegion: (regionId, direction, position = 0.5) => {
-    const tree = get().tree
+    const { tree } = get()
     if (!tree) return
-    const newTree = _splitRegionInTree(tree, regionId, direction, position)
-    set({ tree: newTree, isDirty: true, selectedId: null })
+    const region = findRegionNode(tree.frame.rootRegion, regionId)
+    if (!region || !region.isLeaf) return
+    const axis = direction === 'vertical' ? region.width : region.height
+    const pos = snapOffset(axis, position)
+    const newTree = relayout(_splitRegionInTree(tree, regionId, direction, pos))
+    get()._commit(newTree, { selectedId: null })
+  },
+
+  /**
+   * Reposition an existing split (drag a mullion). With history:false this is a
+   * live preview during a drag; pair it with beginInteraction/endInteraction so
+   * the whole drag collapses into a single undo step.
+   */
+  setSplitPosition: (regionId, rawPosition, { history = false } = {}) => {
+    const { tree } = get()
+    if (!tree) return
+    const region = findRegionNode(tree.frame.rootRegion, regionId)
+    if (!region?.split) return
+    const axis = region.split.direction === 'vertical' ? region.width : region.height
+    const position = snapOffset(axis, rawPosition)
+    const laid = relayout(
+      _mapRegionInTree(tree, regionId, (r) => ({ ...r, split: { ...r.split, position } }))
+    )
+    if (history) get()._commit(laid)
+    else set({ tree: laid, isDirty: true })
+  },
+
+  /** Resize the outer frame (drag a frame handle). Same live/commit pattern. */
+  setFrameSize: (rawW, rawH, { history = false } = {}) => {
+    const { tree } = get()
+    if (!tree) return
+    const width = snapFrame(rawW)
+    const height = snapFrame(rawH)
+    const laid = relayout({
+      ...tree,
+      outerWidth: width,
+      outerHeight: height,
+      frame: { ...tree.frame, width, height },
+    })
+    if (history) get()._commit(laid)
+    else set({ tree: laid, isDirty: true })
+  },
+
+  // ─── Drag lifecycle ─────────────────────────────────────
+  // Capture the pre-drag tree; record one undo step on release if it changed.
+  beginInteraction: () => {
+    if (get()._snapshot == null) set({ _snapshot: get().tree })
+  },
+  endInteraction: () => {
+    const { _snapshot, tree, past } = get()
+    if (_snapshot && _snapshot !== tree) {
+      set({
+        past: [...past, _snapshot].slice(-HISTORY_LIMIT),
+        future: [],
+        _snapshot: null,
+        isDirty: true,
+      })
+    } else {
+      set({ _snapshot: null })
+    }
   },
 
   /**
@@ -84,7 +276,7 @@ const useEditorStore = create((set, get) => ({
     const tree = get().tree
     if (!tree) return
     const newTree = _updateRegionInTree(tree, regionId, patch)
-    set({ tree: newTree, isDirty: true })
+    get()._commit(newTree)
   },
 
   /**
@@ -94,7 +286,7 @@ const useEditorStore = create((set, get) => ({
     const tree = get().tree
     if (!tree) return
     const newTree = _collapseRegionInTree(tree, regionId)
-    set({ tree: newTree, isDirty: true, selectedId: regionId })
+    get()._commit(newTree, { selectedId: regionId })
   },
 
   // ─── Live price ─────────────────────────────────────────

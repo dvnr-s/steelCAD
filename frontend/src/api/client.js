@@ -73,13 +73,29 @@ export const designsApi = {
   delete: (id) => api.delete(`/designs/${id}`),
 }
 
-// ─── Estimates ────────────────────────────────────────────────────
+// ─── Stateless price preview (live canvas pricing) ───────────────────
+export const pricePreview = (tree_json) => api.post('/price', { tree_json })
+
+// ─── Customers ────────────────────────────────────────────────────
+export const customersApi = {
+  list: (params) => api.get('/customers', { params }),
+  get: (id) => api.get(`/customers/${id}`),
+  create: (data) => api.post('/customers', data),
+  update: (id, data) => api.put(`/customers/${id}`, data),
+  delete: (id) => api.delete(`/customers/${id}`),
+}
+
+// ─── Estimates (customer-scoped, multi-frame) ─────────────────────
 export const estimatesApi = {
-  create: (designId, data) => api.post(`/designs/${designId}/estimate`, data),
-  list: (designId) => api.get(`/designs/${designId}/estimates`),
-  get: (estimateId) => api.get(`/estimates/${estimateId}`),
-  downloadPdf: (estimateId) =>
-    api.get(`/estimates/${estimateId}/pdf`, { responseType: 'blob' }),
+  listForCustomer: (customerId) => api.get(`/customers/${customerId}/estimates`),
+  create: (customerId, data) => api.post(`/customers/${customerId}/estimates`, data),
+  get: (id) => api.get(`/estimates/${id}`),
+  update: (id, data) => api.put(`/estimates/${id}`, data),
+  delete: (id) => api.delete(`/estimates/${id}`),
+  addFrame: (id, data) => api.post(`/estimates/${id}/frames`, data),
+  updateFrame: (id, frameId, data) => api.put(`/estimates/${id}/frames/${frameId}`, data),
+  deleteFrame: (id, frameId) => api.delete(`/estimates/${id}/frames/${frameId}`),
+  downloadPdf: (id) => api.get(`/estimates/${id}/pdf`, { responseType: 'blob' }),
 }
 
 // ─── Rates ────────────────────────────────────────────────────────
