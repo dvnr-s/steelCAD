@@ -54,25 +54,102 @@ def _section_rate(section_size: str, gauge: str, rates: RateDict) -> float:
     return _lookup_rate(f"SECTION_{section_size}_{gauge}", rates)
 
 
+# ─── Occupancy helpers (§4A composites) ───────────────────────────
+
+_EPS = 1e-6
+
+
+def _subtree_has_occupied(region: dict) -> bool:
+    """
+    True if the subtree contains any non-open (occupied) leaf.
+    `open` regions are empty voids — no steel, no cost (§4).
+    """
+    if region.get("isLeaf", True) or not region.get("split"):
+        return region.get("regionType") not in (None, "open")
+    return any(_subtree_has_occupied(c) for c in region["split"].get("children", []))
+
+
+def _iter_leaves(region: dict):
+    """Yield every leaf region in the subtree (depth-first)."""
+    if region.get("isLeaf", True) or not region.get("split"):
+        yield region
+        return
+    for child in region["split"]["children"]:
+        yield from _iter_leaves(child)
+
+
 # ─── Frame cost (§9.1 step 1) ─────────────────────────────────────
+
+def _door_frame_rft(frame: dict) -> float:
+    """
+    Void-aware door frame (§4A): the three non-base outer sides (left, top, right)
+    of the bounding box, counting only the extent backed by a non-open region.
+    The bottom sits in the concrete (excluded); empty voids that reach an outer
+    edge carry no steel. Reduces to 2×H + W for a plain door (no voids).
+    """
+    W, H = frame["width"], frame["height"]
+    left = top = right = 0.0
+    for leaf in _iter_leaves(frame["rootRegion"]):
+        if leaf.get("regionType") in (None, "open"):
+            continue  # empty void — no steel
+        x, y = leaf.get("x", 0), leaf.get("y", 0)
+        w, h = leaf["width"], leaf["height"]
+        if abs(x) < _EPS:                 # touches left edge
+            left += h
+        if abs(y) < _EPS:                 # touches top edge
+            top += w
+        if abs((x + w) - W) < _EPS:       # touches right edge
+            right += h
+        # bottom (y + h ≈ H) is the base — in the concrete, excluded
+    return _round2(left + top + right)
+
+
+def _window_frame_rft(frame: dict) -> float:
+    """
+    Void-aware window frame: all four outer sides, counting only the extent backed
+    by a non-open region.  Empty voids that reach an outer edge carry no steel —
+    same logic as _door_frame_rft, but the bottom sill is included (not in concrete)
+    EXCEPT beneath a `door` region: a door opens to the floor and has no sill, so a
+    door leaf touching the bottom edge carries no sill steel (its left/top/right
+    chowkhat sides are unaffected). Reduces to 2×(W+H) when every leaf is occupied
+    and none is a door.
+    """
+    W, H = frame["width"], frame["height"]
+    left = top = right = bottom = 0.0
+    for leaf in _iter_leaves(frame["rootRegion"]):
+        if leaf.get("regionType") in (None, "open"):
+            continue  # empty void — no steel
+        x, y = leaf.get("x", 0), leaf.get("y", 0)
+        w, h = leaf["width"], leaf["height"]
+        if abs(x) < _EPS:                 # touches left edge
+            left += h
+        if abs(y) < _EPS:                 # touches top edge
+            top += w
+        if abs((x + w) - W) < _EPS:       # touches right edge
+            right += h
+        if abs((y + h) - H) < _EPS and leaf.get("regionType") != "door":
+            bottom += w                   # bottom sill — a door opens to the floor (no sill)
+    return _round2(left + top + right + bottom)
+
 
 def _compute_frame_cost(frame: dict, rate: float, product_type: str = "window") -> dict:
     """
     Frame cost = running feet × section rate.
 
     Window (default): full perimeter, 2 × (w + h).
-    Door (§4A.1): the base sits in the concrete, so the frame is 3-sided —
-    2 × height + width (two jambs + head, no sill).
+    Door (§4A.1): the base sits in the concrete, so the frame is 3-sided. For a
+    plain door this is 2 × height + width; for a door + window composite it is the
+    void-aware outer boundary (see `_door_frame_rft`).
     """
     w, h = frame["width"], frame["height"]
     if product_type == "door":
-        rf = _round2(2 * h + w)
+        rf = _door_frame_rft(frame)
         label = "Door frame (base in concrete)"
-        description = f"Door frame {rf} RFT (2×H + W, base excluded) × ₹{rate}/RFT"
+        description = f"Door frame {rf} RFT (3-sided, void-aware) × ₹{rate}/RFT"
     else:
-        rf = _round2(2 * (w + h))
+        rf = _window_frame_rft(frame)
         label = "Frame"
-        description = f"Frame perimeter {rf} RFT × ₹{rate}/RFT"
+        description = f"Frame {rf} RFT (4-sided, void-aware) × ₹{rate}/RFT"
     cost = _round2(rf * rate)
     return {
         "label": label,
@@ -86,10 +163,14 @@ def _compute_frame_cost(frame: dict, rate: float, product_type: str = "window") 
 
 # ─── Split costs (§9.1 step 2) ────────────────────────────────────
 
-def _collect_splits(region: dict) -> list[dict]:
+def _collect_splits(region: dict, product_type: str = "window") -> list[dict]:
     """
     Recursively collect all splits in the tree.
     Each split's length = parent region's height (vertical) or width (horizontal).
+
+    A split where both sides contain at least one occupied (non-open) leaf is a
+    double section (mullion/transom); a split that borders an empty void on either
+    side is a single section regardless of product type.
     """
     splits = []
     split = region.get("split")
@@ -97,6 +178,7 @@ def _collect_splits(region: dict) -> list[dict]:
         return splits
 
     direction = split["direction"]
+    children = split.get("children", [])
     if direction == "vertical":
         length = region["height"]
         label = "Mullion (vertical)"
@@ -104,15 +186,18 @@ def _collect_splits(region: dict) -> list[dict]:
         length = region["width"]
         label = "Transom (horizontal)"
 
+    double = all(_subtree_has_occupied(c) for c in children)
+
     splits.append({
         "split_id": split.get("id", ""),
         "direction": direction,
         "length": _round2(length),
         "label": label,
+        "double": double,
     })
 
-    for child in split.get("children", []):
-        splits.extend(_collect_splits(child))
+    for child in children:
+        splits.extend(_collect_splits(child, product_type))
 
     return splits
 
@@ -121,21 +206,28 @@ def _compute_split_costs(splits: list[dict], rate: float) -> list[dict]:
     """
     Convert collected splits into priced line items.
 
-    Mullions/transoms are partition members priced at 2× the section rate per RFT
-    (MULLION_RATE_MULTIPLIER) because they are double sections — see the constant.
+    Double sections (mullions/transoms between two occupied regions) cost 2× the
+    section rate per RFT (MULLION_RATE_MULTIPLIER). A single member bordering an
+    empty void (door composites, §4A) costs 1× — it is just one section.
     """
-    eff_rate = _round2(rate * MULLION_RATE_MULTIPLIER)
     items = []
     for s in splits:
         length = s["length"]
+        if s.get("double", True):
+            eff_rate = _round2(rate * MULLION_RATE_MULTIPLIER)
+            note = "double section"
+        else:
+            eff_rate = _round2(rate)
+            note = "single section (borders open space)"
         cost = _round2(length * eff_rate)
         items.append({
             "label": s["label"],
-            "description": f"{s['label']} {length} RFT × ₹{eff_rate}/RFT (double section)",
+            "description": f"{s['label']} {length} RFT × ₹{eff_rate}/RFT ({note})",
             "quantity": length,
             "unit": "RFT",
             "rate": eff_rate,
             "cost": cost,
+            "double": s.get("double", True),
         })
     return items
 
@@ -440,7 +532,7 @@ def price_design(
     frame_item = _compute_frame_cost(frame, sec_rate, product_type)
 
     # 2. Collect and price all splits
-    raw_splits = _collect_splits(root_region)
+    raw_splits = _collect_splits(root_region, product_type)
     split_items = _compute_split_costs(raw_splits, sec_rate)
 
     # 3. Walk all regions (depth-first)

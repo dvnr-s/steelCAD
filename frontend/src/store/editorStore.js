@@ -33,6 +33,78 @@ export const makeDoorRegion = (x, y, w, h) => ({
   ],
 })
 
+// A window leaf attached beside/above a door (§4A.3). A normal window region —
+// priced by window rules. Defaults to `fixed`; a `shutter` gets a starter hinge.
+export const makeWindowRegion = (w, h, windowType = 'fixed') => ({
+  ...makeLeafRegion(0, 0, w, h),
+  regionType: windowType,
+  paneSpec: { shutterMaterial: null, infillType: 'none', hasBeading: false },
+  hardware: windowType === 'shutter'
+    ? [{ id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: 2, autoComputed: true, side: 'front' }]
+    : [],
+})
+
+// A fresh branch region wrapping a split of two children. Dimensions are filled
+// in by relayout; positions are ratios within the parent.
+const makeBranch = (direction, position, childA, childB) => ({
+  id: crypto.randomUUID(),
+  type: 'region',
+  x: 0, y: 0, width: 0, height: 0,
+  isLeaf: false,
+  regionType: null,
+  paneSpec: null,
+  overlays: [],
+  hardware: [],
+  split: { id: crypto.randomUUID(), type: 'split', direction, position, children: [childA, childB] },
+  doorHand: null,
+  rebate: 'single',
+})
+
+// id of the first non-open (occupied) leaf in a subtree — used to select the
+// freshly-added window.
+function firstOccupiedLeafId(region) {
+  if (region.isLeaf || !region.split) return region.regionType !== 'open' ? region.id : null
+  for (const c of region.split.children) {
+    const id = firstOccupiedLeafId(c)
+    if (id) return id
+  }
+  return null
+}
+
+// Build a vertical-strip column of given width holding a window of height hWin
+// positioned per vAlign, with up to two `open` voids filling the rest (§4A.3).
+function buildWindowColumn(colW, H, hWin, vAlign, windowType) {
+  const win = makeWindowRegion(colW, hWin, windowType)
+  if (hWin >= H - 1e-6) return win                  // window fills the column
+  if (vAlign === 'top') {
+    return makeBranch('horizontal', hWin / H, win, makeLeafRegion(0, 0, colW, H - hWin))
+  }
+  if (vAlign === 'bottom') {
+    return makeBranch('horizontal', (H - hWin) / H, makeLeafRegion(0, 0, colW, H - hWin), win)
+  }
+  // center — voids above and below
+  const voidH = (H - hWin) / 2
+  const rest = makeBranch('horizontal', hWin / (H - voidH), win, makeLeafRegion(0, 0, colW, voidH))
+  return makeBranch('horizontal', voidH / H, makeLeafRegion(0, 0, colW, voidH), rest)
+}
+
+// Replace a door leaf with a branch carrying the door + a new window on the
+// chosen side/top. Returns { node, windowId }. The door keeps its id and props.
+function buildDoorWithWindow(door, { side, width, height, vAlign, windowType }) {
+  const W = door.width, H = door.height
+  const doorPrime = { ...door }  // preserves id, regionType 'door', hand, rebate, hardware
+  if (side === 'top') {
+    const win = makeWindowRegion(W, height, windowType)   // full-width fanlight
+    return { node: makeBranch('horizontal', height / H, win, doorPrime), windowId: win.id }
+  }
+  const column = buildWindowColumn(width, H, height, vAlign, windowType)
+  const windowId = firstOccupiedLeafId(column)
+  if (side === 'left') {
+    return { node: makeBranch('vertical', width / W, column, doorPrime), windowId }
+  }
+  return { node: makeBranch('vertical', (W - width) / W, doorPrime, column), windowId }
+}
+
 // A new design tree skeleton. productType "door" seeds a pre-typed door leaf.
 export const makeEmptyTree = (name, width, height, sectionSize = '5', gauge = '18G', productType = 'window') => ({
   id: crypto.randomUUID(),
@@ -100,8 +172,13 @@ export function relayout(tree) {
   return { ...tree, frame: { ...tree.frame, rootRegion: root } }
 }
 
+// Strip float drift from ratio products (e.g. 4.7499999999999999 → 4.75) so the
+// stored geometry — and everything downstream (display, validation, pricing) —
+// stays clean. Children are still subdivided from the raw w/h to avoid compounding.
+const _clean = (n) => Math.round(n * 1e4) / 1e4
+
 function _layoutRegion(region, x, y, w, h) {
-  const base = { ...region, x, y, width: w, height: h }
+  const base = { ...region, x: _clean(x), y: _clean(y), width: _clean(w), height: _clean(h) }
   if (region.isLeaf || !region.split) return base
   const { direction, position } = region.split
   const [a, b] = region.split.children
@@ -306,6 +383,40 @@ const useEditorStore = create((set, get) => ({
     if (!tree) return
     const newTree = _collapseRegionInTree(tree, regionId)
     get()._commit(newTree, { selectedId: regionId })
+  },
+
+  /**
+   * Attach a window to a door region on the left/right (with a vertical
+   * position) or on top (fanlight). Carves a column off the door and fills any
+   * leftover space with `open` voids (§4A.3). Returns true on success.
+   */
+  addWindowToDoor: (regionId, opts) => {
+    const { tree } = get()
+    if (!tree) return false
+    const door = findRegionNode(tree.frame.rootRegion, regionId)
+    if (!door || !door.isLeaf || door.regionType !== 'door') return false
+
+    const W = door.width, H = door.height
+    const side = opts.side || 'right'
+    const windowType = opts.windowType || 'fixed'
+    const vAlign = opts.vAlign || 'top'
+
+    // Clamp so the remaining door keeps at least MIN_SIDE on the split axis.
+    let width = Math.max(MIN_SIDE, Number(opts.width) || 0)
+    let height = Math.max(MIN_SIDE, Number(opts.height) || 0)
+    if (side === 'top') {
+      if (H - MIN_SIDE < MIN_SIDE) return false
+      height = Math.min(height, H - MIN_SIDE)
+    } else {
+      if (W - MIN_SIDE < MIN_SIDE) return false
+      width = Math.min(width, W - MIN_SIDE)
+      height = Math.min(height, H)
+    }
+
+    const { node, windowId } = buildDoorWithWindow(door, { side, width, height, vAlign, windowType })
+    const newTree = relayout(_mapRegionInTree(tree, regionId, () => node))
+    get()._commit(newTree, { selectedId: windowId })
+    return true
   },
 
   // ─── Live price ─────────────────────────────────────────

@@ -5,7 +5,9 @@
  */
 import { useState, useEffect } from 'react'
 import { Scissors, X, Plus, ChevronDown, Layers } from 'lucide-react'
+import toast from 'react-hot-toast'
 import useEditorStore from '../store/editorStore'
+import { fmtFt } from '../lib/format'
 
 const REGION_TYPES = [
   { value: 'open',    label: 'Open', color: '#8b949e' },
@@ -298,6 +300,75 @@ function DoorOptionsEditor({ region }) {
   )
 }
 
+// Guided "add a window beside/above a door" (§4A.3). Carves a column off the
+// door; partial-height windows leave an empty void.
+function AddWindowEditor({ region }) {
+  const addWindowToDoor = useEditorStore((s) => s.addWindowToDoor)
+  const [side, setSide] = useState('right')
+  const [width, setWidth] = useState(2)
+  const [height, setHeight] = useState(4)
+  const [vAlign, setVAlign] = useState('top')
+  const [windowType, setWindowType] = useState('fixed')
+  const isTop = side === 'top'
+
+  const add = () => {
+    const ok = addWindowToDoor(region.id, {
+      side, width: Number(width), height: Number(height), vAlign, windowType,
+    })
+    if (!ok) toast.error('Window does not fit — enlarge the door or shrink the window')
+  }
+
+  const sideBtn = (val, label) => (
+    <button className={`btn btn-sm w-full ${side === val ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setSide(val)}>{label}</button>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="form-group">
+        <label>Side</label>
+        <div className="flex gap-2">{sideBtn('left', 'Left')}{sideBtn('right', 'Right')}{sideBtn('top', 'Top')}</div>
+      </div>
+      <div className="flex gap-3">
+        {!isTop && (
+          <div className="form-group" style={{ flex: 1 }}>
+            <label>Width (ft)</label>
+            <input type="number" min="0.5" step="0.5" value={width} onChange={(e) => setWidth(e.target.value)} />
+          </div>
+        )}
+        <div className="form-group" style={{ flex: 1 }}>
+          <label>Height (ft)</label>
+          <input type="number" min="0.5" step="0.5" value={height} onChange={(e) => setHeight(e.target.value)} />
+        </div>
+      </div>
+      {!isTop && (
+        <div className="form-group">
+          <label>Vertical align</label>
+          <div className="flex gap-2">
+            {['top', 'center', 'bottom'].map((v) => (
+              <button key={v} className={`btn btn-sm w-full ${vAlign === v ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setVAlign(v)}>
+                {v[0].toUpperCase() + v.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="form-group">
+        <label>Window type</label>
+        <div className="flex gap-2">
+          <button className={`btn btn-sm w-full ${windowType === 'fixed' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setWindowType('fixed')}>Fixed</button>
+          <button className={`btn btn-sm w-full ${windowType === 'shutter' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setWindowType('shutter')}>Shutter</button>
+        </div>
+      </div>
+      <button className="btn btn-primary btn-sm w-full" onClick={add}>
+        <Plus size={14} /> Add Window
+      </button>
+      <p className="text-xs text-muted" style={{ lineHeight: 1.5 }}>
+        {isTop ? 'A full-width fanlight above the door.' : 'A window beside the door; a shorter window leaves an empty space.'}
+      </p>
+    </div>
+  )
+}
+
 export default function PropertiesPanel() {
   const tree = useEditorStore((s) => s.tree)
   const selectedId = useEditorStore((s) => s.selectedId)
@@ -350,7 +421,7 @@ export default function PropertiesPanel() {
           </button>
         </div>
         <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-muted)', fontFamily: 'var(--font-mono)' }}>
-          {selected.width}ft × {selected.height}ft
+          {fmtFt(selected.height)}ft × {fmtFt(selected.width)}ft
         </div>
       </div>
 
@@ -386,6 +457,14 @@ export default function PropertiesPanel() {
         <div className="panel-section">
           <div className="panel-title">Door Options</div>
           <DoorOptionsEditor region={selected} />
+        </div>
+      )}
+
+      {/* Add a side / top window to a door (door products only, §4A.3) */}
+      {selected.isLeaf && selected.regionType === 'door' && tree.productType === 'door' && (
+        <div className="panel-section">
+          <div className="panel-title">Add Window</div>
+          <AddWindowEditor region={selected} />
         </div>
       )}
 

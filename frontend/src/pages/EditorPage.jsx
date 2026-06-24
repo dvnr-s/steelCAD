@@ -13,20 +13,146 @@ import DesignCanvas from '../components/DesignCanvas'
 import PropertiesPanel from '../components/PropertiesPanel'
 
 function PriceDisplay({ price }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e) => { if (!ref.current?.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
   if (!price) return null
+
+  const fmt = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
+  const splitTotal = (price.splits ?? []).reduce((s, x) => s + (x.cost ?? 0), 0)
+  const paneTotal = (price.regions ?? []).reduce((s, r) =>
+    s + (r.pane_structure?.cost ?? 0) + (r.infill?.cost ?? 0) + (r.beading?.cost ?? 0) + (r.grill?.cost ?? 0), 0)
+  const hwTotal = (price.regions ?? []).reduce((s, r) =>
+    s + (r.hardware ?? []).reduce((a, h) => a + (h.cost ?? 0), 0), 0)
+
+  const categories = [
+    ['Frame', price.frame?.cost ?? 0],
+    ['Splits', splitTotal],
+    ['Pane / Glass', paneTotal],
+    ['Hardware', hwTotal],
+  ].filter(([, v]) => v > 0)
+
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 12,
-      padding: '0 12px',
-      borderLeft: '1px solid var(--c-border)',
-    }}>
-      <div>
+    <div ref={ref} style={{ position: 'relative', padding: '0 12px', borderLeft: '1px solid var(--c-border)' }}>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{ background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left', padding: 0 }}
+        title="Click to see breakdown"
+      >
         <div style={{ fontSize: '0.6875rem', color: 'var(--c-text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>
-          Unit Subtotal
+          Unit Subtotal {open ? '▲' : '▼'}
         </div>
         <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--c-brand)', fontFamily: 'var(--font-mono)' }}>
-          ₹{price.subtotal?.toLocaleString('en-IN')}
+          {fmt(price.subtotal)}
         </div>
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 100,
+          background: 'var(--c-surface)', border: '1px solid var(--c-border)',
+          borderRadius: 'var(--radius)', boxShadow: '0 4px 20px rgba(0,0,0,0.25)',
+          padding: '12px 16px', minWidth: 240,
+        }}>
+          {categories.map(([label, val]) => (
+            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', gap: 32, padding: '3px 0', fontSize: '0.8125rem' }}>
+              <span style={{ color: 'var(--c-text-muted)' }}>{label}</span>
+              <span style={{ fontFamily: 'var(--font-mono)' }}>{fmt(val)}</span>
+            </div>
+          ))}
+          <div style={{ height: 1, background: 'var(--c-border)', margin: '8px 0' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 32, fontWeight: 700, fontSize: '0.875rem' }}>
+            <span>Unit Subtotal</span>
+            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--c-brand)' }}>{fmt(price.subtotal)}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PricingBreakdown({ price }) {
+  if (!price) return null
+  const fmt = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
+  const dim = { fontSize: '0.75rem', color: 'var(--c-text-dim)' }
+  const row = { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8, padding: '2px 0', fontSize: '0.8125rem' }
+  const mono = { fontFamily: 'var(--font-mono)' }
+  const occupiedRegions = (price.regions ?? []).filter((r) => r.subtotal > 0)
+
+  return (
+    <div className="panel-section">
+      <div className="panel-title">Pricing</div>
+
+      {/* Frame */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ ...dim, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Frame</div>
+        <div style={row}>
+          <span style={{ color: 'var(--c-text-muted)', fontSize: '0.8125rem' }}>{price.frame?.label}</span>
+          <span style={mono}>{fmt(price.frame?.cost)}</span>
+        </div>
+        <div style={dim}>{price.frame?.quantity} RFT × ₹{price.frame?.rate}/RFT</div>
+      </div>
+
+      {/* Splits */}
+      {(price.splits ?? []).length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ ...dim, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>
+            Splits ({price.splits.length})
+          </div>
+          {price.splits.map((s, i) => (
+            <div key={i} style={row}>
+              <span style={{ color: 'var(--c-text-muted)', display: 'flex', gap: 5, alignItems: 'center' }}>
+                {s.label}
+                <span style={{ ...dim }}>
+                  {s.quantity} ft
+                  <span style={{ marginLeft: 3, opacity: 0.8 }}>{s.double ? '×2' : '×1'}</span>
+                </span>
+              </span>
+              <span style={mono}>{fmt(s.cost)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Regions */}
+      {occupiedRegions.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ ...dim, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3 }}>Regions</div>
+          {occupiedRegions.map((r, i) => (
+            <div key={i} style={{ marginBottom: 6, paddingLeft: 6, borderLeft: '2px solid var(--c-border)' }}>
+              <div style={{ ...row, fontWeight: 500 }}>
+                <span style={{ display: 'flex', gap: 4, alignItems: 'baseline' }}>
+                  {r.region_label}
+                  <span style={dim}>{r.dimensions}</span>
+                </span>
+                <span style={mono}>{fmt(r.subtotal)}</span>
+              </div>
+              {r.pane_structure && <div style={{ ...row, ...dim }}><span>Pane</span><span>{fmt(r.pane_structure.cost)}</span></div>}
+              {r.infill && <div style={{ ...row, ...dim }}><span>Infill</span><span>{fmt(r.infill.cost)}</span></div>}
+              {r.beading && <div style={{ ...row, ...dim }}><span>Beading</span><span>{fmt(r.beading.cost)}</span></div>}
+              {r.grill && <div style={{ ...row, ...dim }}><span>Grill</span><span>{fmt(r.grill.cost)}</span></div>}
+              {(r.hardware ?? []).length > 0 && (
+                <div style={{ ...row, ...dim }}>
+                  <span>Hardware</span>
+                  <span>{fmt(r.hardware.reduce((s, h) => s + (h.cost ?? 0), 0))}</span>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{ height: 1, background: 'var(--c-border)', margin: '6px 0' }} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: '0.875rem' }}>
+        <span>Unit Subtotal</span>
+        <span style={{ ...mono, color: 'var(--c-brand)' }}>{fmt(price.subtotal)}</span>
       </div>
     </div>
   )
@@ -320,6 +446,9 @@ export default function EditorPage() {
             )}
           </div>
         )}
+
+        {/* Live pricing breakdown */}
+        <PricingBreakdown price={livePrice} />
       </div>
 
       {/* Center: canvas */}

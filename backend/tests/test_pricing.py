@@ -93,24 +93,35 @@ def test_round_rupee():
 # ═══════════════════════════════════════════════════════════════════
 
 def test_frame_only_open_region():
-    """A 5ft × 4ft frame with one open region. Only frame cost."""
+    """
+    A 5ft × 4ft frame whose only leaf is 'open' — a fully void frame.
+    Void-aware: no edge is backed by an occupied leaf → 0 RFT, ₹0 frame cost.
+    """
     root = _leaf_region(5.0, 4.0, "open")
     tree = _design_tree(5.0, 4.0, root, "5", "18G")
 
     result = price_design(tree, RATES)
 
-    # Frame: 2×(5+4) = 18 RFT × ₹120 = ₹2,160
+    assert result["frame"]["quantity"] == 0.0
+    assert result["frame"]["cost"] == 0.0
+    assert result["splits"] == []
+    assert result["subtotal"] == 0.0
+
+
+def test_frame_only_fixed_region():
+    """A 5ft × 4ft frame with one fixed region. Frame = full perimeter (void-aware, all occupied)."""
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+
+    result = price_design(tree, RATES)
+
+    # Frame: void-aware 4-sided, full region → 2×(5+4) = 18 RFT × ₹120 = ₹2,160
     assert result["frame"]["quantity"] == 18.0
     assert result["frame"]["rate"] == 120.0
     assert result["frame"]["cost"] == 2160.0
-
-    # No splits, no region costs
     assert result["splits"] == []
     assert result["subtotal"] == 2160.0
-
-    # GST: 2160 × 0.18 = 388.80
     assert result["gst"] == 388.80
-    # Grand total: 2160 + 388.80 = 2548.80 → ₹2549
     assert result["grand_total"] == 2549
 
 
@@ -369,7 +380,7 @@ def test_jali_with_beading():
 # ═══════════════════════════════════════════════════════════════════
 
 def test_percentage_discount():
-    root = _leaf_region(5.0, 4.0, "open")
+    root = _leaf_region(5.0, 4.0, "fixed")
     tree = _design_tree(5.0, 4.0, root, "5", "18G")
 
     result = price_design(tree, RATES, discount_type="PERCENTAGE", discount_value=10)
@@ -386,7 +397,7 @@ def test_percentage_discount():
 # ═══════════════════════════════════════════════════════════════════
 
 def test_flat_discount():
-    root = _leaf_region(5.0, 4.0, "open")
+    root = _leaf_region(5.0, 4.0, "fixed")
     tree = _design_tree(5.0, 4.0, root, "5", "18G")
 
     result = price_design(tree, RATES, discount_type="FLAT", discount_value=500)
@@ -404,7 +415,7 @@ def test_flat_discount():
 
 def test_section_6_16g():
     """6\" 16G section at ₹210/RFT."""
-    root = _leaf_region(5.0, 4.0, "open")
+    root = _leaf_region(5.0, 4.0, "fixed")
     tree = _design_tree(5.0, 4.0, root, "6", "16G")
 
     result = price_design(tree, RATES)
@@ -416,7 +427,7 @@ def test_section_6_16g():
 
 def test_section_10_18g():
     """10\" 18G section at ₹230/RFT."""
-    root = _leaf_region(5.0, 4.0, "open")
+    root = _leaf_region(5.0, 4.0, "fixed")
     tree = _design_tree(5.0, 4.0, root, "10", "18G")
 
     result = price_design(tree, RATES)
@@ -430,7 +441,7 @@ def test_section_10_18g():
 # ═══════════════════════════════════════════════════════════════════
 
 def test_advance_percentage():
-    root = _leaf_region(5.0, 4.0, "open")
+    root = _leaf_region(5.0, 4.0, "fixed")
     tree = _design_tree(5.0, 4.0, root, "5", "18G")
 
     result = price_design(tree, RATES, advance_pct=60)
@@ -451,13 +462,26 @@ def _door_tree(width, height, root_region, section_size="5", gauge="18G"):
     return tree
 
 
+def _branch(width, height, x, y, direction, position, child_a, child_b):
+    """A branch region with a split into two children (for composite fixtures)."""
+    return {
+        "id": _uuid(), "type": "region", "x": x, "y": y,
+        "width": width, "height": height, "isLeaf": False, "regionType": None,
+        "paneSpec": None, "overlays": [], "hardware": [],
+        "split": {
+            "id": _uuid(), "type": "split", "direction": direction,
+            "position": position, "children": [child_a, child_b],
+        },
+    }
+
+
 def test_door_product_frame_is_three_sided():
     """
-    §4A.1: a door product's outer frame excludes the base run.
+    §4A.1: a plain door product's outer frame excludes the base run.
     3ft × 7ft door frame = 2×7 + 3 = 17 RFT × ₹120 = ₹2,040
     (a window would be 2×(3+7) = 20 RFT × ₹120 = ₹2,400).
     """
-    root = _leaf_region(3.0, 7.0, "open")
+    root = _leaf_region(3.0, 7.0, "door")
     tree = _door_tree(3.0, 7.0, root, "5", "18G")
 
     result = price_design(tree, RATES)
@@ -465,6 +489,93 @@ def test_door_product_frame_is_three_sided():
     assert result["frame"]["quantity"] == 17.0
     assert result["frame"]["cost"] == 2040.0
     assert "base in concrete" in result["frame"]["label"].lower()
+
+
+# ─── Door + window composites (§4A.3) ──────────────────────────────
+
+def test_composite_door_with_partial_side_window():
+    """
+    Reference sketch: door 4×7 (left) + top-aligned window 3×5 (right), with a
+    2ft empty void below the window.
+    Frame (single, base excluded): left 7 + top 7 + window-right 5 = 19 RFT.
+    Mullions: door|column 7×2 = 14, window sill 3×1 = 3.
+    Total steel = 36 RFT × ₹120 = ₹4,320.
+    """
+    door = _leaf_region(4.0, 7.0, "door", x=0, y=0)
+    window = _leaf_region(3.0, 5.0, "fixed", pane_spec=None, x=4.0, y=0)
+    void = _leaf_region(3.0, 2.0, "open", x=4.0, y=5.0)
+    right_col = _branch(3.0, 7.0, 4.0, 0, "horizontal", 5.0 / 7.0, window, void)
+    root = _branch(7.0, 7.0, 0, 0, "vertical", 4.0 / 7.0, door, right_col)
+    tree = _door_tree(7.0, 7.0, root, "5", "18G")
+
+    result = price_design(tree, RATES)
+
+    assert result["frame"]["quantity"] == 19.0
+    assert result["frame"]["cost"] == 2280.0     # 19 × 120
+
+    splits = result["splits"]
+    assert len(splits) == 2
+    # vertical door|column — double section
+    assert splits[0]["quantity"] == 7.0 and splits[0]["rate"] == 240.0 and splits[0]["cost"] == 1680.0
+    # window sill (bordering the void) — single section
+    assert splits[1]["quantity"] == 3.0 and splits[1]["rate"] == 120.0 and splits[1]["cost"] == 360.0
+
+    # 36 RFT × 120 = 4,320 (door + fixed window carry no extra region cost here)
+    assert result["subtotal"] == 4320.0
+
+
+def test_composite_door_with_middle_window():
+    """
+    Door 4×7 + a 3×3 window centred on the right (2ft void above AND below).
+    Frame: left 7 + top 4 + window-right 3 = 14 RFT.
+    Mullions: door|column 7×2 = 14, head 3×1, sill 3×1.
+    Total = 34 RFT × ₹120 = ₹4,080.
+    """
+    door = _leaf_region(4.0, 7.0, "door", x=0, y=0)
+    void_top = _leaf_region(3.0, 2.0, "open", x=4.0, y=0)
+    window = _leaf_region(3.0, 3.0, "fixed", pane_spec=None, x=4.0, y=2.0)
+    void_bot = _leaf_region(3.0, 2.0, "open", x=4.0, y=5.0)
+    rest = _branch(3.0, 5.0, 4.0, 2.0, "horizontal", 3.0 / 5.0, window, void_bot)
+    right_col = _branch(3.0, 7.0, 4.0, 0, "horizontal", 2.0 / 7.0, void_top, rest)
+    root = _branch(7.0, 7.0, 0, 0, "vertical", 4.0 / 7.0, door, right_col)
+    tree = _door_tree(7.0, 7.0, root, "5", "18G")
+
+    result = price_design(tree, RATES)
+
+    assert result["frame"]["quantity"] == 14.0
+    assert result["frame"]["cost"] == 1680.0
+
+    splits = result["splits"]
+    assert len(splits) == 3
+    assert splits[0]["rate"] == 240.0 and splits[0]["cost"] == 1680.0   # door|column double
+    assert splits[1]["rate"] == 120.0 and splits[1]["cost"] == 360.0    # head, single
+    assert splits[2]["rate"] == 120.0 and splits[2]["cost"] == 360.0    # sill, single
+
+    assert result["subtotal"] == 4080.0   # 34 × 120
+
+
+def test_composite_door_with_fanlight():
+    """
+    Door 4×7 with a 4×2 fanlight on top (total 4×9).
+    Frame: left 9 + top 4 + right 9 = 22 RFT.
+    Mullion: door|fanlight transom 4×2 = 8.
+    Total = 30 RFT × ₹120 = ₹3,600.
+    """
+    fanlight = _leaf_region(4.0, 2.0, "fixed", pane_spec=None, x=0, y=0)
+    door = _leaf_region(4.0, 7.0, "door", x=0, y=2.0)
+    root = _branch(4.0, 9.0, 0, 0, "horizontal", 2.0 / 9.0, fanlight, door)
+    tree = _door_tree(4.0, 9.0, root, "5", "18G")
+
+    result = price_design(tree, RATES)
+
+    assert result["frame"]["quantity"] == 22.0
+    assert result["frame"]["cost"] == 2640.0
+
+    splits = result["splits"]
+    assert len(splits) == 1
+    assert splits[0]["quantity"] == 4.0 and splits[0]["rate"] == 240.0 and splits[0]["cost"] == 960.0
+
+    assert result["subtotal"] == 3600.0   # 30 × 120
 
 
 def test_door_leaf_not_priced_separately():
@@ -579,12 +690,80 @@ def test_rebate_is_price_neutral_and_back_side_hardware_adds():
 
 
 def test_window_product_unchanged_without_product_type():
-    """Regression: a tree with no productType still prices as a window (full perimeter)."""
-    root = _leaf_region(3.0, 7.0, "open")
+    """Regression: a tree with no productType still prices as a window (void-aware 4-sided)."""
+    root = _leaf_region(3.0, 7.0, "fixed")
     tree = _design_tree(3.0, 7.0, root, "5", "18G")  # no productType key
     assert "productType" not in tree
 
     result = price_design(tree, RATES)
-    # Full perimeter: 2×(3+7) = 20 × 120 = ₹2,400
+    # Full occupied region → void-aware 4-sided = full perimeter: 2×(3+7) = 20 RFT × 120 = ₹2,400
+    assert result["frame"]["quantity"] == 20.0
     assert result["frame"]["cost"] == 2400.0
     assert result["frame"]["label"] == "Frame"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test: Window product with an open void region (matches door behaviour)
+# ═══════════════════════════════════════════════════════════════════
+
+def _void_aware_layout():
+    """
+    Shared 6×9 composite used by the void-aware tests:
+      top strip:  FIXED  6×2  (x=0, y=0)
+      left:       DOOR   3.5×7 (x=0, y=2)
+      top-right:  FIXED  2.5×3 (x=3.5, y=2)
+      bot-right:  OPEN   2.5×4 (x=3.5, y=5)
+    """
+    top   = _leaf_region(6.0, 2.0, "fixed", x=0,   y=0)
+    door  = _leaf_region(3.5, 7.0, "door",  x=0,   y=2,
+                         hardware=[{"id": _uuid(), "type": "hardware",
+                                    "hardwareType": "hinge", "variant": "SS_12G",
+                                    "quantity": 3, "autoComputed": True, "side": "front"}])
+    fixed = _leaf_region(2.5, 3.0, "fixed", x=3.5, y=2)
+    void  = _leaf_region(2.5, 4.0, "open",  x=3.5, y=5)
+
+    right_col = _branch(2.5, 7.0, 3.5, 2.0, "horizontal", 3.0 / 7.0, fixed, void)
+    bottom_row = _branch(6.0, 7.0, 0.0, 2.0, "vertical",   3.5 / 6.0, door,  right_col)
+    return _branch(6.0, 9.0, 0.0, 0.0, "horizontal", 2.0 / 9.0, top, bottom_row)
+
+
+def test_window_frame_is_void_aware():
+    """
+    A window product with an open void region — mirrors the door composite test.
+
+    Void-aware frame edges (door regions carry no bottom sill — they open to the floor):
+      left:   FIXED(h=2) + DOOR(h=7)                       = 9
+      top:    FIXED(w=6)                                    = 6
+      right:  FIXED(h=2, full-width) + FIXED(h=3, 2.5×3)  = 5
+      bottom: DOOR is sill-exempt → 0
+      Total = 20 RFT × ₹175 = ₹3,500
+
+    The 2.5ft transom between FIXED and OPEN is single (borders void).
+    """
+    root = _void_aware_layout()
+    tree = _design_tree(6.0, 9.0, root, "6", "18G")  # window product (no productType)
+
+    result = price_design(tree, RATES)
+
+    # Frame: void-aware, door bottom sill-exempt = 20 RFT × ₹175 = ₹3,500
+    assert result["frame"]["quantity"] == 20.0
+    assert result["frame"]["cost"] == 3500.0
+
+    # The 2.5ft transom (FIXED vs OPEN) must be single, not double.
+    single_transoms = [s for s in result["splits"] if not s["double"]]
+    assert len(single_transoms) == 1
+    assert single_transoms[0]["quantity"] == 2.5
+    assert single_transoms[0]["rate"] == 175.0   # single = 1× section rate
+
+
+def test_window_and_door_frames_match_for_same_layout():
+    """
+    The same composite priced as a window vs a door must now produce an identical
+    frame and identical subtotal — a door region in a window carries no bottom sill,
+    so the two products no longer diverge (the original ambiguity is gone).
+    """
+    window = price_design(_design_tree(6.0, 9.0, _void_aware_layout(), "6", "18G"), RATES)
+    door = price_design(_door_tree(6.0, 9.0, _void_aware_layout(), "6", "18G"), RATES)
+
+    assert window["frame"]["quantity"] == door["frame"]["quantity"] == 20.0
+    assert window["subtotal"] == door["subtotal"]

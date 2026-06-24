@@ -6,12 +6,13 @@
  *
  * Returns an array of { id, message } issues. Empty array = valid.
  */
+import { dimLabel } from './format'
 
 function pushLeafIssues(region, issues) {
   const rt = region.regionType
   const ps = region.paneSpec || {}
   const hardware = region.hardware || []
-  const label = `${region.width}×${region.height}`
+  const label = dimLabel(region)
 
   // INV-7: every leaf must have a region type
   if (!rt) {
@@ -77,7 +78,7 @@ function pushLeafIssues(region, issues) {
 }
 
 function pushBranchIssues(region, issues) {
-  const label = `${region.width}×${region.height}`
+  const label = dimLabel(region)
   // V-6: branch regions may only carry SS grills, never MS
   for (const overlay of region.overlays || []) {
     if (overlay.material === 'MS_SQUARE') {

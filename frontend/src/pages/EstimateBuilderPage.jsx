@@ -190,6 +190,34 @@ export default function EstimateBuilderPage() {
     }
   }
 
+  // Inline rename. Backend FrameUpdate.name; recompute refreshes the estimate.
+  const setFrameName = async (frameId, name) => {
+    const trimmed = (name || '').trim()
+    if (!trimmed) { toast.error('Frame name cannot be empty'); return }
+    try {
+      const { data } = await estimatesApi.updateFrame(id, frameId, { name: trimmed })
+      applyEstimate(data)
+    } catch {
+      toast.error('Failed to rename frame')
+    }
+  }
+
+  // Section/gauge live in the geometry tree — patch tree_json so the backend
+  // re-derives the frame columns and re-prices.
+  const setFrameSpec = async (frame, patch) => {
+    const tree = {
+      ...frame.tree_json,
+      sectionSize: patch.sectionSize ?? frame.section_size,
+      gauge: patch.gauge ?? frame.gauge,
+    }
+    try {
+      const { data } = await estimatesApi.updateFrame(id, frame.id, { tree_json: tree })
+      applyEstimate(data)
+    } catch {
+      toast.error('Failed to update section')
+    }
+  }
+
   const deleteFrame = async (frameId) => {
     if (!confirm('Remove this frame from the estimate?')) return
     try {
@@ -275,9 +303,35 @@ export default function EstimateBuilderPage() {
                 <tr><td colSpan={7} style={{ textAlign: 'center', padding: 28, color: 'var(--c-text-muted)' }}>No frames yet — add a door or window to begin.</td></tr>
               ) : est.frames.map((f) => (
                 <tr key={f.id} style={{ borderTop: '1px solid var(--c-border)' }}>
-                  <td style={{ padding: '10px 16px', fontWeight: 600 }}>{f.name}</td>
+                  <td style={{ padding: '6px 16px', fontWeight: 600 }}>
+                    <input
+                      key={f.name}
+                      defaultValue={f.name}
+                      title="Click to rename"
+                      onFocus={(e) => { e.target.style.borderColor = 'var(--c-border)' }}
+                      onBlur={(e) => {
+                        e.target.style.borderColor = 'transparent'
+                        if (e.target.value.trim() !== f.name) setFrameName(f.id, e.target.value)
+                      }}
+                      style={{ fontWeight: 600, width: '100%', minWidth: 90, background: 'transparent', border: '1px solid transparent', borderRadius: 'var(--radius)', padding: '4px 6px' }}
+                    />
+                  </td>
                   <td style={{ padding: '10px 16px', color: 'var(--c-text-muted)', fontFamily: 'var(--font-mono)' }}>{f.outer_width}ft × {f.outer_height}ft</td>
-                  <td style={{ padding: '10px 16px', color: 'var(--c-text-muted)' }}>{f.section_size}" {f.gauge}</td>
+                  <td style={{ padding: '6px 16px', color: 'var(--c-text-muted)' }}>
+                    <div className="flex gap-1" style={{ alignItems: 'center' }}>
+                      <select value={f.section_size} onChange={(e) => setFrameSpec(f, { sectionSize: e.target.value })} title="Section size"
+                        style={{ fontSize: '0.8rem', padding: '2px 4px', width: 58 }}>
+                        <option value="5">5"</option>
+                        <option value="6">6"</option>
+                        <option value="10">10"</option>
+                      </select>
+                      <select value={f.gauge} onChange={(e) => setFrameSpec(f, { gauge: e.target.value })} title="Gauge"
+                        style={{ fontSize: '0.8rem', padding: '2px 4px', width: 64 }}>
+                        <option value="18G">18G</option>
+                        <option value="16G">16G</option>
+                      </select>
+                    </div>
+                  </td>
                   <td style={{ padding: '6px 16px', textAlign: 'right' }}>
                     <input type="number" min="1" defaultValue={f.quantity} onBlur={(e) => setFrameQty(f.id, e.target.value)}
                       style={{ width: 60, textAlign: 'right', fontFamily: 'var(--font-mono)' }} />

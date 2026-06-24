@@ -35,6 +35,11 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    # Bind-mount the source so `--reload` picks up host edits without a rebuild.
+    # Anonymous volume on /app/venv keeps the host venv from shadowing the image's.
+    volumes:
+      - ./backend:/app
+      - /app/venv
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   # ─── Frontend (added in Phase 2) ────────────────────
