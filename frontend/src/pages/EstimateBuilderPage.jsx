@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Plus, Trash2, Pencil, Download, X, LayoutGrid, SquarePen } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Pencil, Download, X, LayoutGrid, SquarePen, AppWindow, DoorOpen } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { estimatesApi, designsApi } from '../api/client'
 import { makeEmptyTree } from '../store/editorStore'
@@ -18,9 +18,13 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
   const [designs, setDesigns] = useState([])
   const [loadingLib, setLoadingLib] = useState(true)
   // new frame
-  const [form, setForm] = useState({ name: '', width: 5, height: 4, sectionSize: '5', gauge: '18G' })
+  const [form, setForm] = useState({ name: '', width: 5, height: 4, sectionSize: '5', gauge: '18G', productType: 'window' })
   const [quantity, setQuantity] = useState(1)
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+
+  // Switching product swaps in sensible default dimensions for that product.
+  const pickProduct = (pt) =>
+    setForm((f) => ({ ...f, productType: pt, ...(pt === 'door' ? { width: 3.5, height: 7 } : { width: 5, height: 4 }) }))
 
   useEffect(() => {
     designsApi.list({ limit: 100 }).then(({ data }) => setDesigns(data)).catch(() => {}).finally(() => setLoadingLib(false))
@@ -43,9 +47,9 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
     if (!form.name.trim()) { toast.error('Frame name is required'); return }
     setSaving(true)
     try {
-      const tree = makeEmptyTree(form.name.trim(), Number(form.width), Number(form.height), form.sectionSize, form.gauge)
+      const tree = makeEmptyTree(form.name.trim(), Number(form.width), Number(form.height), form.sectionSize, form.gauge, form.productType)
       const { data } = await estimatesApi.addFrame(estimateId, { name: form.name.trim(), tree_json: tree, quantity: Number(quantity) || 1 })
-      toast.success('Frame added — open it to design')
+      toast.success(form.productType === 'door' ? 'Door added — open it to design' : 'Frame added — open it to design')
       onAdded(data)
     } catch (err) {
       toast.error(err.response?.data?.detail?.validation_errors?.[0] || 'Failed to add frame')
@@ -79,8 +83,19 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
         {tab === 'new' ? (
           <form onSubmit={addNew} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             <div className="form-group">
-              <label>Frame Name</label>
-              <input value={form.name} onChange={set('name')} placeholder="e.g. Living Room Window" autoFocus required />
+              <label>Product</label>
+              <div className="flex gap-2">
+                <button type="button" className={`btn btn-sm w-full ${form.productType === 'window' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pickProduct('window')}>
+                  <AppWindow size={14} /> Window
+                </button>
+                <button type="button" className={`btn btn-sm w-full ${form.productType === 'door' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pickProduct('door')}>
+                  <DoorOpen size={14} /> Door
+                </button>
+              </div>
+            </div>
+            <div className="form-group">
+              <label>{form.productType === 'door' ? 'Door Name' : 'Frame Name'}</label>
+              <input value={form.name} onChange={set('name')} placeholder={form.productType === 'door' ? 'e.g. Main Entrance Door' : 'e.g. Living Room Window'} autoFocus required />
             </div>
             <div className="flex gap-3">
               <div className="form-group" style={{ flex: 1 }}><label>Width (ft)</label><input type="number" min="1" max="30" step="0.5" value={form.width} onChange={set('width')} /></div>

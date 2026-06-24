@@ -156,26 +156,27 @@ function HardwareEditor({ region }) {
   const updateRegion = useEditorStore((s) => s.updateRegion)
   const hardware = region.hardware || []
   const rt = region.regionType
+  const isDoubleRebate = rt === 'door' && region.rebate === 'double'
 
   if (rt !== 'shutter' && rt !== 'door') {
     return <p className="text-xs text-muted">Hardware only on shutter/door regions</p>
   }
 
-  const addHinge = () => {
+  const addHinge = (side = 'front') => {
     updateRegion(region.id, {
       hardware: [
         ...hardware,
-        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: 2, autoComputed: false },
+        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: 2, autoComputed: false, side },
       ],
     })
   }
 
-  const addLock = () => {
+  const addLock = (side = 'front') => {
     if (rt !== 'door') return
     updateRegion(region.id, {
       hardware: [
         ...hardware,
-        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'lock', variant: 'standard', quantity: 1, autoComputed: false },
+        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'lock', variant: 'standard', quantity: 1, autoComputed: false, side },
       ],
     })
   }
@@ -186,46 +187,111 @@ function HardwareEditor({ region }) {
   const updateHw = (id, patch) =>
     updateRegion(region.id, { hardware: hardware.map((h) => h.id === id ? { ...h, ...patch } : h) })
 
+  const HwRow = ({ hw }) => (
+    <div key={hw.id} className="flex items-center gap-2" style={{
+      background: 'var(--c-surface-2)',
+      border: '1px solid var(--c-border)',
+      borderRadius: 'var(--radius)',
+      padding: '6px 8px',
+    }}>
+      <span className="text-xs text-muted" style={{ flex: 1 }}>{hw.hardwareType}</span>
+      {hw.hardwareType === 'hinge' && (
+        <select
+          style={{ width: 100, fontSize: '0.75rem', padding: '2px 6px' }}
+          value={hw.variant}
+          onChange={(e) => updateHw(hw.id, { variant: e.target.value })}
+        >
+          <option value="SS_12G">SS 12G</option>
+          <option value="SS_10G">SS 10G</option>
+        </select>
+      )}
+      <input
+        type="number" min="1" max="10"
+        value={hw.quantity}
+        onChange={(e) => updateHw(hw.id, { quantity: +e.target.value })}
+        style={{ width: 44, fontSize: '0.75rem', padding: '2px 6px' }}
+      />
+      <button className="btn btn-ghost btn-icon" style={{ padding: 2 }}
+        onClick={() => removeHw(hw.id)}>
+        <X size={12} color="var(--c-error)" />
+      </button>
+    </div>
+  )
+
+  // Split hardware by side so a double-rebate door shows front / back groups.
+  const front = hardware.filter((h) => (h.side || 'front') !== 'back')
+  const back = hardware.filter((h) => h.side === 'back')
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {hardware.map((hw) => (
-        <div key={hw.id} className="flex items-center gap-2" style={{
-          background: 'var(--c-surface-2)',
-          border: '1px solid var(--c-border)',
-          borderRadius: 'var(--radius)',
-          padding: '6px 8px',
-        }}>
-          <span className="text-xs text-muted" style={{ flex: 1 }}>{hw.hardwareType}</span>
-          {hw.hardwareType === 'hinge' && (
-            <select
-              style={{ width: 100, fontSize: '0.75rem', padding: '2px 6px' }}
-              value={hw.variant}
-              onChange={(e) => updateHw(hw.id, { variant: e.target.value })}
-            >
-              <option value="SS_12G">SS 12G</option>
-              <option value="SS_10G">SS 10G</option>
-            </select>
-          )}
-          <input
-            type="number" min="1" max="10"
-            value={hw.quantity}
-            onChange={(e) => updateHw(hw.id, { quantity: +e.target.value })}
-            style={{ width: 44, fontSize: '0.75rem', padding: '2px 6px' }}
-          />
-          <button className="btn btn-ghost btn-icon" style={{ padding: 2 }}
-            onClick={() => removeHw(hw.id)}>
-            <X size={12} color="var(--c-error)" />
-          </button>
-        </div>
-      ))}
+      {isDoubleRebate && <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Front side</div>}
+      {front.map((hw) => <HwRow key={hw.id} hw={hw} />)}
       <div className="flex gap-2">
-        <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={addHinge}>
+        <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addHinge('front')}>
           <Plus size={12} /> Hinge
         </button>
         {rt === 'door' && (
-          <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={addLock}>
+          <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addLock('front')}>
             <Plus size={12} /> Lock
           </button>
+        )}
+      </div>
+
+      {isDoubleRebate && (
+        <>
+          <div className="text-xs text-muted" style={{ fontWeight: 600, marginTop: 6 }}>Other side (back)</div>
+          {back.map((hw) => <HwRow key={hw.id} hw={hw} />)}
+          <div className="flex gap-2">
+            <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addHinge('back')}>
+              <Plus size={12} /> Hinge
+            </button>
+            <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addLock('back')}>
+              <Plus size={12} /> Lock
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// Door-only options: hand label + rebate (spec §4A.4 / §4A.5).
+function DoorOptionsEditor({ region }) {
+  const updateRegion = useEditorStore((s) => s.updateRegion)
+  const hand = region.doorHand || null
+  const rebate = region.rebate || 'single'
+
+  const setHand = (h) => updateRegion(region.id, { doorHand: hand === h ? null : h })
+
+  const setRebate = (r) => {
+    // Dropping to single rebate strips any back-side hardware (V-16).
+    if (r === 'single') {
+      const hardware = (region.hardware || []).filter((h) => h.side !== 'back')
+      updateRegion(region.id, { rebate: r, hardware })
+    } else {
+      updateRegion(region.id, { rebate: r })
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="form-group">
+        <label>Hand</label>
+        <div className="flex gap-2">
+          <button className={`btn btn-sm w-full ${hand === 'left' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setHand('left')}>Left</button>
+          <button className={`btn btn-sm w-full ${hand === 'right' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setHand('right')}>Right</button>
+        </div>
+      </div>
+      <div className="form-group">
+        <label>Rebate</label>
+        <div className="flex gap-2">
+          <button className={`btn btn-sm w-full ${rebate === 'single' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setRebate('single')}>Single</button>
+          <button className={`btn btn-sm w-full ${rebate === 'double' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setRebate('double')}>Double</button>
+        </div>
+        {rebate === 'double' && (
+          <p className="text-xs text-muted" style={{ marginTop: 6, lineHeight: 1.5 }}>
+            Same frame price as single — double rebate just lets you add hinges/lock on the other side.
+          </p>
         )}
       </div>
     </div>
@@ -298,7 +364,15 @@ export default function PropertiesPanel() {
                 key={rt.value}
                 className={`btn btn-sm ${selected.regionType === rt.value ? 'btn-primary' : 'btn-secondary'}`}
                 style={selected.regionType === rt.value ? {} : { borderColor: rt.color + '44', color: rt.color }}
-                onClick={() => updateRegion(selected.id, { regionType: rt.value, paneSpec: null, hardware: [] })}
+                onClick={() => updateRegion(selected.id, {
+                  regionType: rt.value,
+                  paneSpec: null,
+                  hardware: [],
+                  doorHand: null,
+                  rebate: 'single',
+                  // A door has no pane or grill (§4A.2) — drop any overlay when switching to door.
+                  ...(rt.value === 'door' ? { overlays: [] } : {}),
+                })}
               >
                 {rt.label}
               </button>
@@ -307,19 +381,29 @@ export default function PropertiesPanel() {
         </div>
       )}
 
-      {/* Pane Spec */}
-      {selected.isLeaf && selected.regionType && (
+      {/* Door options (hand + rebate) */}
+      {selected.isLeaf && selected.regionType === 'door' && (
+        <div className="panel-section">
+          <div className="panel-title">Door Options</div>
+          <DoorOptionsEditor region={selected} />
+        </div>
+      )}
+
+      {/* Pane Spec — shutter/fixed only. Door regions have no pane (§4A.2). */}
+      {selected.isLeaf && (selected.regionType === 'shutter' || selected.regionType === 'fixed') && (
         <div className="panel-section">
           <div className="panel-title">Pane</div>
           <PaneSpecEditor region={selected} />
         </div>
       )}
 
-      {/* Grill */}
-      <div className="panel-section">
-        <div className="panel-title">Grill</div>
-        <GrillEditor region={selected} />
-      </div>
+      {/* Grill — not on door regions (§4A.2) */}
+      {selected.regionType !== 'door' && (
+        <div className="panel-section">
+          <div className="panel-title">Grill</div>
+          <GrillEditor region={selected} />
+        </div>
+      )}
 
       {/* Hardware */}
       {selected.isLeaf && (

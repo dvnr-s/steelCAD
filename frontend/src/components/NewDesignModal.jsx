@@ -1,16 +1,24 @@
 import { useState } from 'react'
-import { X } from 'lucide-react'
+import { X, AppWindow, DoorOpen } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { designsApi } from '../api/client'
 import { makeEmptyTree } from '../store/editorStore'
 
 export default function NewDesignModal({ onClose, onCreate }) {
+  const [productType, setProductType] = useState('window')
   const [name, setName] = useState('')
   const [width, setWidth] = useState(5)
   const [height, setHeight] = useState(4)
   const [sectionSize, setSectionSize] = useState('5')
   const [gauge, setGauge] = useState('18G')
   const [loading, setLoading] = useState(false)
+
+  // Switching product swaps in sensible default dimensions for that product.
+  const pickProduct = (pt) => {
+    setProductType(pt)
+    if (pt === 'door') { setWidth(3.5); setHeight(7) }
+    else { setWidth(5); setHeight(4) }
+  }
 
   const handleCreate = async (e) => {
     e.preventDefault()
@@ -19,16 +27,17 @@ export default function NewDesignModal({ onClose, onCreate }) {
 
     setLoading(true)
     try {
-      const tree = makeEmptyTree(name, Number(width), Number(height), sectionSize, gauge)
+      const tree = makeEmptyTree(name, Number(width), Number(height), sectionSize, gauge, productType)
       const { data } = await designsApi.create({
         name: name.trim(),
+        productType,
         outerWidth: Number(width),
         outerHeight: Number(height),
         sectionSize,
         gauge,
         tree_json: tree,
       })
-      toast.success('Design created!')
+      toast.success(productType === 'door' ? 'Door created!' : 'Design created!')
       onCreate(data.id)
     } catch (err) {
       const detail = err.response?.data?.detail
@@ -56,7 +65,29 @@ export default function NewDesignModal({ onClose, onCreate }) {
 
         <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div className="form-group">
-            <label>Design Name</label>
+            <label>Product</label>
+            <div className="flex gap-2">
+              <button type="button"
+                className={`btn btn-sm w-full ${productType === 'window' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => pickProduct('window')}>
+                <AppWindow size={14} /> Window
+              </button>
+              <button type="button"
+                className={`btn btn-sm w-full ${productType === 'door' ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => pickProduct('door')}>
+                <DoorOpen size={14} /> Door
+              </button>
+            </div>
+            {productType === 'door' && (
+              <p className="text-xs text-muted" style={{ marginTop: 6, lineHeight: 1.5 }}>
+                Door frame base sits in the concrete — priced as 2×height + width. Add side
+                panels or a fanlight with splits after creating.
+              </p>
+            )}
+          </div>
+
+          <div className="form-group">
+            <label>{productType === 'door' ? 'Door Name' : 'Design Name'}</label>
             <input
               type="text"
               placeholder="e.g. Main Window, Gate Design..."

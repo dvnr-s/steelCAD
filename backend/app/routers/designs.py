@@ -58,6 +58,7 @@ async def list_designs(
             id=d.id,
             name=d.name,
             description=d.description,
+            product_type=(d.tree_json or {}).get("productType", "window"),
             outer_width=float(d.outer_width),
             outer_height=float(d.outer_height),
             section_size=d.section_size,

@@ -294,17 +294,17 @@ def test_ss_grill_continuity():
 # Test: Door region with GP sheet, hinges, lock
 # ═══════════════════════════════════════════════════════════════════
 
-def test_door_with_lock():
+def test_door_region_is_hardware_only():
     """
-    Spec §13 example: 7ft × 3ft door, GP Sheet.
-    Pane: 2×(7+3)×250 = ₹5,000
+    §4A.2: a door region has NO pane — only hardware.
+    7ft × 3ft door: no pane structure.
     Hinges (door, ≤7ft → 3): 3×120 = ₹360
-    Lock: 1×100 = ₹100
+    Lock: 1×100 = ₹100  → region subtotal ₹460
     """
     root = _leaf_region(
         width=3.0, height=7.0,
         region_type="door",
-        pane_spec={"shutterMaterial": "GP_SHEET", "infillType": "none", "hasBeading": False},
+        pane_spec=None,
         hardware=[
             {
                 "id": _uuid(), "type": "hardware",
@@ -322,13 +322,13 @@ def test_door_with_lock():
     result = price_design(tree, RATES)
 
     region = result["regions"][0]
-    # Pane structure: 2×(3+7)×250 = ₹5,000
-    assert region["pane_structure"]["cost"] == 5000.0
+    # No pane structure for a door region
+    assert region["pane_structure"] is None
     # Hinges: 3×120 = ₹360
     assert region["hardware"][0]["cost"] == 360.0
     # Lock: 1×100 = ₹100
     assert region["hardware"][1]["cost"] == 100.0
-    assert region["subtotal"] == 5460.0
+    assert region["subtotal"] == 460.0
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -438,3 +438,153 @@ def test_advance_percentage():
     assert result["advance_pct"] == 60.0
     # Grand total: 2549 → 60% = 1529.4 → ₹1529
     assert result["advance_amount"] == 1529
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test: Standalone Door product (spec §4A)
+# ═══════════════════════════════════════════════════════════════════
+
+def _door_tree(width, height, root_region, section_size="5", gauge="18G"):
+    """A design tree with productType 'door'."""
+    tree = _design_tree(width, height, root_region, section_size, gauge)
+    tree["productType"] = "door"
+    return tree
+
+
+def test_door_product_frame_is_three_sided():
+    """
+    §4A.1: a door product's outer frame excludes the base run.
+    3ft × 7ft door frame = 2×7 + 3 = 17 RFT × ₹120 = ₹2,040
+    (a window would be 2×(3+7) = 20 RFT × ₹120 = ₹2,400).
+    """
+    root = _leaf_region(3.0, 7.0, "open")
+    tree = _door_tree(3.0, 7.0, root, "5", "18G")
+
+    result = price_design(tree, RATES)
+
+    assert result["frame"]["quantity"] == 17.0
+    assert result["frame"]["cost"] == 2040.0
+    assert "base in concrete" in result["frame"]["label"].lower()
+
+
+def test_door_leaf_not_priced_separately():
+    """
+    §4A.2: a `door` leaf is not priced separately and has no pane. In a door
+    product the chowkhat frame carries the steel; the door region adds only
+    its hardware.
+    Frame: 2×7 + 3 = 17 RFT × 120 = ₹2,040. Door region: hinges 3×120 = ₹360.
+    """
+    root = _leaf_region(
+        3.0, 7.0, "door",
+        pane_spec=None,
+        hardware=[{
+            "id": _uuid(), "type": "hardware", "hardwareType": "hinge",
+            "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "front",
+        }],
+    )
+    tree = _door_tree(3.0, 7.0, root, "5", "18G")
+
+    result = price_design(tree, RATES)
+    region = result["regions"][0]
+    assert region["pane_structure"] is None
+    assert region["subtotal"] == 360.0           # hardware only
+    assert result["frame"]["cost"] == 2040.0     # 3-sided chowkhat carries the steel
+    assert result["subtotal"] == 2400.0          # 2040 frame + 360 hinges
+
+
+def test_door_with_side_window_shared_mullion():
+    """
+    §4A.3: door + side window. The shared mullion is billed once by the window
+    convention (2× section). The door leaf excludes its base; the side window
+    (a shutter) keeps full-perimeter window pricing.
+    """
+    door = _leaf_region(
+        3.0, 7.0, "door",
+        pane_spec=None,
+        hardware=[{
+            "id": _uuid(), "type": "hardware", "hardwareType": "hinge",
+            "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "front",
+        }],
+    )
+    window = _leaf_region(
+        3.0, 7.0, "shutter", x=3.0,
+        pane_spec={"shutterMaterial": "MS_PIPE", "infillType": "glass", "hasBeading": False},
+        hardware=[{
+            "id": _uuid(), "type": "hardware", "hardwareType": "hinge",
+            "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "front",
+        }],
+    )
+    root = {
+        "id": _uuid(), "type": "region", "x": 0, "y": 0,
+        "width": 6.0, "height": 7.0, "isLeaf": False, "regionType": None,
+        "paneSpec": None, "overlays": [], "hardware": [],
+        "split": {
+            "id": _uuid(), "type": "split", "direction": "vertical",
+            "position": 0.5, "children": [door, window],
+        },
+    }
+    tree = _door_tree(6.0, 7.0, root, "5", "18G")
+
+    result = price_design(tree, RATES)
+
+    # Frame (door product, 3-sided): 2×7 + 6 = 20 RFT × 120 = ₹2,400
+    assert result["frame"]["cost"] == 2400.0
+    assert "base in concrete" in result["frame"]["label"].lower()
+    # One mullion, billed once: length 7 × (120×2) = ₹1,680
+    assert len(result["splits"]) == 1
+    assert result["splits"][0]["cost"] == 1680.0
+    # Door region has no pane — hardware only: hinges 3×120 = ₹360
+    door_bd = result["regions"][0]
+    assert door_bd["pane_structure"] is None
+    assert door_bd["subtotal"] == 360.0
+    # Side window keeps full perimeter (window rules): 2×(3+7)×100 = 2,000 + hinges 360 = 2,360
+    win_bd = result["regions"][1]
+    assert win_bd["pane_structure"]["cost"] == 2000.0
+    assert win_bd["subtotal"] == 2360.0
+    # Total: 2400 frame + 1680 mullion + 360 door + 2360 window = ₹6,800
+    assert result["subtotal"] == 6800.0
+
+
+def test_rebate_is_price_neutral_and_back_side_hardware_adds():
+    """
+    §4A.5/§4A.6: single vs double rebate produce the SAME frame price.
+    Double rebate only permits back-side hardware, which is priced as normal.
+    """
+    def door_root(rebate, extra_hw):
+        return _leaf_region(
+            3.0, 7.0, "door",
+            pane_spec=None,
+            hardware=[
+                {"id": _uuid(), "type": "hardware", "hardwareType": "hinge",
+                 "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "front"},
+                *extra_hw,
+            ],
+        ) | {"rebate": rebate}
+
+    single = price_design(_door_tree(3.0, 7.0, door_root("single", [])), RATES)
+    double = price_design(_door_tree(3.0, 7.0, door_root("double", [
+        {"id": _uuid(), "type": "hardware", "hardwareType": "hinge",
+         "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "back"},
+        {"id": _uuid(), "type": "hardware", "hardwareType": "lock",
+         "variant": "standard", "quantity": 1, "autoComputed": False, "side": "back"},
+    ])), RATES)
+
+    # Frame price is identical regardless of rebate.
+    assert single["frame"]["cost"] == double["frame"]["cost"] == 2040.0
+    # Back-side hinges (3×120=360) + lock (100) = ₹460 added.
+    assert double["subtotal"] - single["subtotal"] == 460.0
+    # Back-side line items are labelled.
+    labels = [hw["label"] for hw in double["regions"][0]["hardware"]]
+    assert any("back side" in lbl for lbl in labels)
+
+
+def test_window_product_unchanged_without_product_type():
+    """Regression: a tree with no productType still prices as a window (full perimeter)."""
+    root = _leaf_region(3.0, 7.0, "open")
+    tree = _design_tree(3.0, 7.0, root, "5", "18G")  # no productType key
+    assert "productType" not in tree
+
+    result = price_design(tree, RATES)
+    # Full perimeter: 2×(3+7) = 20 × 120 = ₹2,400
+    assert result["frame"]["cost"] == 2400.0
+    assert result["frame"]["label"] == "Frame"

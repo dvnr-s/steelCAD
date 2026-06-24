@@ -15,13 +15,30 @@ export const makeLeafRegion = (x, y, w, h) => ({
   overlays: [],
   hardware: [],
   split: null,
+  doorHand: null,        // door-region label only (spec §4A.4)
+  rebate: 'single',      // door-region rebate (spec §4A.5)
 })
 
-// A new design tree skeleton
-export const makeEmptyTree = (name, width, height, sectionSize = '5', gauge = '18G') => ({
+// Door hinge auto-count by leaf height (spec R-5 / §4A): ≤7ft→3, ≤8ft→4, else 5.
+export const doorHingeCount = (height) => (height <= 7 ? 3 : height <= 8 ? 4 : 5)
+
+// A door leaf pre-typed as a door (used to seed a standalone door product).
+// A door has NO pane/grill (§4A.2) — only hardware (hinges/lock) + hand/rebate.
+export const makeDoorRegion = (x, y, w, h) => ({
+  ...makeLeafRegion(x, y, w, h),
+  regionType: 'door',
+  paneSpec: null,
+  hardware: [
+    { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: doorHingeCount(h), autoComputed: true, side: 'front' },
+  ],
+})
+
+// A new design tree skeleton. productType "door" seeds a pre-typed door leaf.
+export const makeEmptyTree = (name, width, height, sectionSize = '5', gauge = '18G', productType = 'window') => ({
   id: crypto.randomUUID(),
   type: 'design',
   name,
+  productType,
   outerWidth: width,
   outerHeight: height,
   sectionSize,
@@ -31,7 +48,9 @@ export const makeEmptyTree = (name, width, height, sectionSize = '5', gauge = '1
     type: 'frame',
     width,
     height,
-    rootRegion: makeLeafRegion(0, 0, width, height),
+    rootRegion: productType === 'door'
+      ? makeDoorRegion(0, 0, width, height)
+      : makeLeafRegion(0, 0, width, height),
   },
 })
 
@@ -325,6 +344,8 @@ function _splitRegionNode(region, targetId, direction, position) {
       regionType: null,
       paneSpec: null,
       hardware: [],
+      doorHand: null,        // shed door labels — this is no longer a door leaf
+      rebate: 'single',
       split: {
         id: crypto.randomUUID(),
         type: 'split',
@@ -384,7 +405,7 @@ function _collapseRegionInTree(tree, regionId) {
 
 function _collapseRegionNode(region, targetId) {
   if (region.id === targetId) {
-    return { ...region, isLeaf: true, regionType: 'open', split: null, hardware: [], paneSpec: null, overlays: [] }
+    return { ...region, isLeaf: true, regionType: 'open', split: null, hardware: [], paneSpec: null, overlays: [], doorHand: null, rebate: 'single' }
   }
   if (region.split) {
     return {

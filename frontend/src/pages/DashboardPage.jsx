@@ -45,6 +45,7 @@ function DesignCard({ design, onDelete, onOpen }) {
           {design.name}
         </div>
         <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
+          {design.product_type === 'door' && <span className="badge" style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>Door</span>}
           <span className="badge badge-brand">{design.outer_width}ft × {design.outer_height}ft</span>
           <span className="badge badge-accent">{design.section_size}" {design.gauge}</span>
         </div>

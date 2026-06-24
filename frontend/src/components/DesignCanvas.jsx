@@ -74,6 +74,32 @@ function regionStroke(region, selectedId) {
   return '#30363d'
 }
 
+// Standard elevation door symbol: a triangle (two lines) whose apex sits on the
+// hinge edge and base spans the latch edge — instantly reads which side opens.
+function DoorSwing({ region, px, py }) {
+  const x = px(region.x), y = py(region.y)
+  const w = region.width * SCALE, h = region.height * SCALE
+  const hingeLeft = (region.doorHand || 'left') !== 'right'
+  const apexX = hingeLeft ? x : x + w
+  const latchX = hingeLeft ? x + w : x
+  const pts = [latchX, y + 4, apexX, y + h / 2, latchX, y + h - 4]
+  return <Line points={pts} stroke="rgba(239,68,68,0.55)" strokeWidth={1.25} listening={false} />
+}
+
+// Hatched "in the concrete" ground band along the bottom edge of a door frame.
+function ConcreteBase({ frame, px, py }) {
+  const x0 = px(0), x1 = px(frame.width), yb = py(frame.height)
+  const ticks = []
+  for (let gx = x0; gx < x1; gx += 12)
+    ticks.push(<Line key={gx} points={[gx, yb, gx + 8, yb + 8]} stroke="rgba(139,124,108,0.55)" strokeWidth={1} listening={false} />)
+  return (
+    <>
+      <Line points={[x0, yb, x1, yb]} stroke="#8b7c6c" strokeWidth={3} listening={false} />
+      {ticks}
+    </>
+  )
+}
+
 function GrillOverlay({ region, px, py }) {
   const x = px(region.x), y = py(region.y)
   const pw = region.width * SCALE, ph = region.height * SCALE
@@ -171,6 +197,9 @@ export default function DesignCanvas({ width, height }) {
         {/* Frame outline */}
         <Rect x={px(0)} y={py(0)} width={fw} height={fh} fill="transparent" stroke="#3b82f6" strokeWidth={3} listening={false} />
 
+        {/* Door product: base sits in the concrete (3-sided frame) */}
+        {tree.productType === 'door' && <ConcreteBase frame={frame} px={px} py={py} />}
+
         {/* Frame dimension labels */}
         <Text x={px(frame.width / 2) - 20} y={py(0) - 22} text={`${frame.width}ft`} fontSize={11} fill="#8b949e" fontFamily="Inter, sans-serif" listening={false} />
         <Text x={px(0) - 30} y={py(frame.height / 2) - 8} text={`${frame.height}ft`} fontSize={11} fill="#8b949e" fontFamily="Inter, sans-serif" rotation={-90} listening={false} />
@@ -199,6 +228,15 @@ export default function DesignCanvas({ width, height }) {
                   fill="#484f58" fontFamily="JetBrains Mono, monospace" listening={false} />
               )}
               {region.overlays?.length > 0 && <GrillOverlay region={region} px={px} py={py} />}
+              {region.isLeaf && region.regionType === 'door' && (
+                <>
+                  <DoorSwing region={region} px={px} py={py} />
+                  {(region.doorHand || region.rebate === 'double') && rw > 40 && (
+                    <Text x={rx + rw - 34} y={ry + 4} text={`${region.doorHand ? region.doorHand[0].toUpperCase() : ''}${region.rebate === 'double' ? ' 2R' : ''}`.trim()}
+                      fontSize={9} fill="#ef4444" fontFamily="JetBrains Mono, monospace" opacity={0.8} listening={false} />
+                  )}
+                </>
+              )}
             </Group>
           )
         })}

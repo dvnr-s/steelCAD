@@ -24,9 +24,19 @@ function pushLeafIssues(region, issues) {
     issues.push({ id: region.id, message: `Region ${label} is below the 0.5ft minimum` })
   }
 
-  // V-12: shutter/door require a shutter material
-  if ((rt === 'shutter' || rt === 'door') && !ps.shutterMaterial) {
-    issues.push({ id: region.id, message: `${rt} ${label} needs a shutter material` })
+  // V-12: shutter requires a shutter material (door regions have no pane)
+  if (rt === 'shutter' && !ps.shutterMaterial) {
+    issues.push({ id: region.id, message: `shutter ${label} needs a shutter material` })
+  }
+
+  // V-18: door regions carry hardware only — no pane (material/infill/beading) or grill
+  if (rt === 'door') {
+    if (ps.shutterMaterial || (ps.infillType && ps.infillType !== 'none') || ps.hasBeading) {
+      issues.push({ id: region.id, message: `Door ${label} has no pane (no material, infill, or beading)` })
+    }
+    if ((region.overlays || []).length > 0) {
+      issues.push({ id: region.id, message: `Door ${label} cannot have a grill` })
+    }
   }
 
   // V-5: shutter/door require at least one hinge
@@ -42,9 +52,15 @@ function pushLeafIssues(region, issues) {
     issues.push({ id: region.id, message: `Lock on ${rt} ${label} — locks are door-only` })
   }
 
-  // V-15: door regions must be solid (infill "none")
-  if (rt === 'door' && ps.infillType && ps.infillType !== 'none') {
-    issues.push({ id: region.id, message: `Door ${label} must be a solid panel (no infill)` })
+  // V-16: back-side hardware requires a double-rebate door
+  const hasBack = hardware.some((hw) => hw.side === 'back')
+  if (hasBack && !(rt === 'door' && region.rebate === 'double')) {
+    issues.push({ id: region.id, message: `Back-side hardware on ${label} needs a double-rebate door` })
+  }
+
+  // V-17: doorHand / rebate are meaningful only on door regions
+  if (rt !== 'door' && (region.doorHand || (region.rebate && region.rebate !== 'single'))) {
+    issues.push({ id: region.id, message: `Door hand/rebate set on a ${rt} region ${label}` })
   }
 
   // V-13: beading requires infill

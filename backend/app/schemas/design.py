@@ -30,13 +30,18 @@ class GrillOverlay(BaseModel):
 
 
 class Hardware(BaseModel):
-    """Hardware attachment on a leaf region (spec §7)."""
+    """Hardware attachment on a leaf region (spec §7).
+
+    `side` distinguishes front- vs back-side hardware on a door (spec §4A.6).
+    `back` is only valid on a double-rebate door region (validated server-side).
+    """
     id: UUID
     type: Literal["hardware"] = "hardware"
     hardwareType: Literal["hinge", "lock"]
     variant: str
     quantity: int = Field(ge=1)
     autoComputed: bool = True
+    side: Literal["front", "back"] = "front"
 
 
 # ─── Tree node schemas (recursive) ─────────────────────────────────
@@ -59,6 +64,9 @@ class Region(BaseModel):
     overlays: list[GrillOverlay] = []
     hardware: list[Hardware] = []
     split: Optional[Split] = None
+    # Door-region-only labelling (spec §4A). Cosmetic hand + rebate selector.
+    doorHand: Optional[Literal["left", "right"]] = None
+    rebate: Literal["single", "double"] = "single"
 
 
 class Split(BaseModel):
@@ -95,6 +103,7 @@ class DesignTree(BaseModel):
     id: UUID
     type: Literal["design"] = "design"
     name: str
+    productType: Literal["window", "door"] = "window"
     outerWidth: float = Field(ge=1)
     outerHeight: float = Field(ge=1)
     sectionSize: Literal["5", "6", "10"]
@@ -108,6 +117,7 @@ class DesignCreate(BaseModel):
     """Request body for creating a new design."""
     name: str
     description: Optional[str] = None
+    productType: Literal["window", "door"] = "window"
     outerWidth: float = Field(ge=1)
     outerHeight: float = Field(ge=1)
     sectionSize: Literal["5", "6", "10"] = "5"
@@ -145,6 +155,7 @@ class DesignListItem(BaseModel):
     id: UUID
     name: str
     description: Optional[str]
+    product_type: str = "window"
     outer_width: float
     outer_height: float
     section_size: str

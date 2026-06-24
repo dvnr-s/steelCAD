@@ -122,10 +122,19 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
         if infill != "none" or ps.get("hasBeading") or ps.get("shutterMaterial"):
             errors.append(f"P-5: '{rt}' region {rid} should not have pane specification")
 
-    # V-12: shutter/door must have shutter material
-    if rt in ("shutter", "door"):
+    # V-12: shutter regions must have a shutter material (door regions do NOT —
+    # a door leaf has no pane, see V-18 / §4A.2)
+    if rt == "shutter":
         if not ps or not ps.get("shutterMaterial"):
-            errors.append(f"V-12: {rt} region {rid} must have a shutter material selected")
+            errors.append(f"V-12: shutter region {rid} must have a shutter material selected")
+
+    # V-18: door regions carry hardware only — no pane (shutter material / infill /
+    # beading) and no grill overlay (§4A.2)
+    if rt == "door":
+        if ps and (ps.get("shutterMaterial") or ps.get("infillType", "none") != "none" or ps.get("hasBeading")):
+            errors.append(f"V-18: door region {rid} has no pane (no shutter material, infill, or beading)")
+        if region.get("overlays"):
+            errors.append(f"V-18: door region {rid} cannot have a grill")
 
     # V-5: shutter/door must have at least one hinge
     if rt in ("shutter", "door"):
@@ -141,10 +150,20 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
                 f"Only 'door' regions."
             )
 
-    # V-15: Door regions must have infillType "none" (solid panel)
-    if rt == "door" and ps:
-        if ps.get("infillType", "none") != "none":
-            errors.append(f"V-15: Door region {rid} must have infillType 'none' (solid panel)")
+    # V-16: Back-side hardware requires a double-rebate door (§4A.6)
+    has_back_hw = any(hw.get("side") == "back" for hw in hardware)
+    if has_back_hw and not (rt == "door" and region.get("rebate") == "double"):
+        errors.append(
+            f"V-16: Back-side hardware on region {rid} requires a double-rebate "
+            f"door. A single-rebate door has no back side."
+        )
+
+    # V-17: doorHand / rebate are meaningful only on door regions
+    if rt != "door":
+        if region.get("doorHand"):
+            errors.append(f"V-17: doorHand is only valid on 'door' regions, not '{rt}' region {rid}")
+        if region.get("rebate", "single") != "single":
+            errors.append(f"V-17: rebate is only valid on 'door' regions, not '{rt}' region {rid}")
 
     # V-13: Beading requires infill
     if ps and ps.get("hasBeading"):

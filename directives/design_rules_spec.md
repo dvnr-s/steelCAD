@@ -1,7 +1,7 @@
 # SteelCAD — Design Rules Spec
 
-> **Status**: Draft v3 — pane model added, door type added, grill/infill separated
-> **Last updated**: 2026-05-25
+> **Status**: Draft v4 — standalone Door product added (productType, 3-sided concrete base, rebate, door hand)
+> **Last updated**: 2026-06-23
 > **Purpose**: Remove all domain ambiguity BEFORE implementation begins.
 
 This document is the single source of truth for the object model, geometry rules, region semantics, pane model, grill attachment, and pricing derivation. No feature code may be written until this spec is internally consistent and approved.
@@ -183,7 +183,7 @@ A leaf region's `regionType` defines what occupies that space:
 | `open` | Empty opening, no infill | No | No | No |
 | `fixed` | Fixed (non-operable) panel | No | Optional (glass / jali) | No |
 | `shutter` | Operable window pane (hinged) | Yes (RF-based) | Optional (glass / jali) | Hinges (window logic), **NO lock** |
-| `door` | Operable door leaf (hinged) | Yes (RF-based) | No (solid panel) | Hinges (door logic), optional lock |
+| `door` | Operable door leaf (hinged) | **No** (leaf not priced separately — §4A.2) | **No** (no infill, no grill) | Hinges (door logic), optional lock |
 | `louver` | Ventilation louver | No | No | No |
 
 ### 4.1 Region Type Rules
@@ -206,6 +206,120 @@ A leaf region's `regionType` defines what occupies that space:
 
 ---
 
+## 4A. Standalone Door Product
+
+A **Design** has a top-level `productType`:
+
+```
+productType : "window" | "door"   — default "window"
+```
+
+A `"window"` product behaves exactly as the rest of this spec describes (the outer
+frame is a full perimeter, no special base handling). A `"door"` product is a
+real steel door unit (a *chowkhat* + leaf, optionally with a fanlight and side
+panels). It reuses the **entire region tree** — splits, region types, panes,
+infill, grill, hardware — but adds the door-specific rules below.
+
+> A door product is still ONE Design / ONE Frame (assumption §14.22). Its geometry
+> tree is identical in shape to a window's; only the rules in this section differ.
+
+### 4A.1 The Base Is In The Concrete (3-Sided Frame)
+
+The outer frame of a door product is set into the floor/concrete on its bottom
+edge, so **no steel runs along the base**. The frame is three-sided (two jambs +
+head):
+
+```
+door_frame_RF      = 2 × frame.height + frame.width      (NOT 2 × (w + h))
+door_frame_cost    = door_frame_RF × section_rate
+```
+
+This is the only change to frame pricing. Section size, gauge, and the section
+rate lookup are unchanged.
+
+### 4A.2 The Door Leaf Has No Pane And Is Not Priced Separately
+
+A `door` region is **not** a window shutter. It has:
+
+- **no structural pane** — no shutter material (MS pipe / GP sheet) and no RF
+  pane cost. The door's steel is carried entirely by the chowkhat frame (§4A.1);
+  the leaf itself adds **no line item**;
+- **no infill** (no glass / jali) and **no beading**;
+- **no grill** of any kind.
+
+A `door` region therefore contributes only its **hardware** (hinges, optional
+lock — and on a double rebate, the other-side set, §4A.6) plus the cosmetic hand
+(§4A.4) and rebate (§4A.5). The chowkhat frame's 3-sided running feet (§4A.1) is
+the door's structural cost.
+
+> This corrects the earlier model where a door leaf was priced like a shutter
+> pane. Doors do not carry shutter panes, infill, beading, or grill. Finer
+> door-leaf details (panel make-up, lock styles) are out of scope for this version
+> and will be specified separately.
+
+### 4A.3 Fanlights, Side Panels, and Shared Mullions
+
+- A door product may be subdivided like any window. A **fanlight** (transom above
+  the door) or **side panels** (windows flanking the door) are ordinary regions,
+  typed and priced by the normal window rules (§5, §6).
+- **Side panels need not be full height.** A 5 ft window beside a 7 ft door is
+  modelled by splitting the side column horizontally into the window region (top)
+  and an `open` region (bottom stub). `open` regions have zero cost (§4), so the
+  masonry below the side window is simply not billed.
+- The **mullion/transom shared between the door and an adjacent window** is a
+  normal `Split` and is priced by the window convention — double section, `length
+  × 2 × section_rate` (§9.1 step 2). It is billed once, never per side.
+
+### 4A.4 Door Hand (Left / Right)
+
+A `door` region carries an optional hand label:
+
+```
+doorHand : "left" | "right" | null   — default null
+```
+
+This is a **labelling / drawing** property only. It has **no pricing effect**. It
+indicates the hinge/handle side for fabrication and is drawn on the canvas as a
+swing indicator.
+
+### 4A.5 Rebate (Single / Double)
+
+A `door` region carries a rebate:
+
+```
+rebate : "single" | "double"   — default "single"
+```
+
+- **Rebate does NOT change the frame price.** A single-rebate and a double-rebate
+  door frame cost the same (same section, same `2H + W`).
+- A **double rebate** door is rebated on both faces, which physically allows a
+  second leaf / hardware on the **other (back) side**. Its only effect on the
+  model is to *permit* back-side hardware (§4A.6).
+
+### 4A.6 Two-Sided Hardware
+
+Hardware on a `door` region gains an optional side:
+
+```
+side : "front" | "back"   — default "front"
+```
+
+- `side: "front"` hardware follows the normal door rules (hinges by R-5, optional
+  lock, §7).
+- `side: "back"` hardware (a second set of hinges and/or a lock for the reverse
+  leaf) is **only valid when `rebate: "double"`**. It is priced identically to
+  front-side hardware — per piece, summed into the region total. There is no
+  separate "back side" rate.
+
+### 4A.7 Deferred (v-next)
+
+- **Jali on the other side** (a mesh leaf on the back of a double-rebate door) is
+  intentionally **not** modelled in this version. When added, it will be a
+  back-side leaf priced as structural RF + jali mesh area. Until then, the back
+  side carries hardware only.
+
+---
+
 ## 5. Pane Model — Structural Pane + Infill + Beading
 
 A pane is a **layered object** with three distinct layers that must NEVER be collapsed into one:
@@ -218,7 +332,7 @@ Pane = Structural Pane Cost + Infill Specification + Optional Beading
 
 | Layer | What it is | Pricing | Applies to |
 |-------|-----------|---------|------------|
-| **Structural pane** | The physical shutter/pane frame itself | RF-based: `pane_RF × shutter_material_rate` | `shutter` and `door` regions only |
+| **Structural pane** | The physical shutter/pane frame itself | RF-based: `pane_RF × shutter_material_rate` | `shutter` regions only (door regions have NO pane — §4A.2) |
 | **Infill** | What fills the pane opening | glass = ₹0; jali = area-based | `shutter` and `fixed` regions |
 | **Beading** | Edge trim around the infill | perimeter-based: `pane_perimeter × beading_rate` | Any region with infill (glass OR jali) |
 
@@ -231,8 +345,10 @@ pane_RF = 2 × (region.width + region.height)
 pane_structure_cost = pane_RF × selected_shutter_material_rate
 ```
 
-- Applies to `shutter` and `door` regions only.
+- Applies to `shutter` regions only.
 - `fixed` regions do NOT have structural pane cost (they are held directly by the frame/splits).
+- `door` regions do NOT have structural pane cost either — the door leaf is not
+  priced separately (§4A.2); the chowkhat frame carries the door's steel.
 - The shutter material choice (`MS_PIPE` or `GP_SHEET`) is per-region.
 
 ### 5.3 Infill Specification
@@ -263,10 +379,13 @@ For any region with a pane specification:
 
 ```
 pane_total =
-    pane_structure_cost          (shutter/door regions only; 0 for fixed)
+    pane_structure_cost          (shutter regions only; 0 for fixed/door)
   + infill_cost                  (0 for glass, area-based for jali)
   + beading_cost                 (0 if no beading)
 ```
+
+> `door` regions have NO pane (§4A.2) — they are not in this table. A door
+> contributes only hardware; its steel is the chowkhat frame (§4A.1).
 
 **Examples:**
 
@@ -277,22 +396,21 @@ pane_total =
 | `shutter` 3×4ft, MS_PIPE | jali | no | ₹1,400 | ₹1,320 | ₹0 | ₹2,720 |
 | `fixed` 3×4ft | glass | yes | ₹0 | ₹0 | ₹560 | ₹560 |
 | `fixed` 3×4ft | jali | yes | ₹0 | ₹1,320 | ₹560 | ₹1,880 |
-| `door` 7×3ft, GP_SHEET | none | no | 2×(7+3)×250 = ₹5,000 | ₹0 | ₹0 | ₹5,000 |
 
 ### 5.6 Pane Rules
 
 - **P-1**: Pane specification is a property of the region, not a separate node.
 - **P-2**: Only leaf regions may have a pane specification.
-- **P-3**: `shutter` and `door` regions always have structural pane cost (RF-based), regardless of infill.
+- **P-3**: `shutter` regions always have structural pane cost (RF-based), regardless of infill.
 - **P-4**: `fixed` regions have NO structural pane cost. They can have infill + beading only.
-- **P-5**: `open` and `louver` regions have NO pane specification.
+- **P-5**: `open`, `louver`, and `door` regions have NO pane specification. (`door`: see §4A.2 — no pane, infill, beading, or grill.)
 - **P-6**: Glass infill has zero material cost. It is a label only.
 - **P-7**: Jali infill cost is ADDITIONAL to the structural pane cost. Never replaces it.
 - **P-8**: Beading can be applied to BOTH glass and jali panes. It is NOT glass-only.
 - **P-9**: Beading requires infill — cannot apply beading to `infillType: "none"`.
 - **P-10**: Each region's pane specification is independent. Do not merge or infer across regions.
 - **P-11**: When a region is subdivided, its pane specification is cleared.
-- **P-12**: `door` regions do not have infill (solid panel). paneSpec.infillType is always `"none"` for doors.
+- **P-12**: `door` regions have NO pane specification at all — no shutter material, no infill, no beading, no grill (§4A.2). Their `paneSpec` is `null`.
 
 ---
 
@@ -461,8 +579,12 @@ function priceDesign(tree):
     sectionRate = lookupRate(sectionSize, gauge)
     
     # 1. Frame cost
+    #    Window: full perimeter. Door (§4A.1): 3-sided, base is in the concrete.
     frame = tree.frame
-    frameRF = 2 × (frame.width + frame.height)
+    if tree.productType == "door":
+        frameRF = 2 × frame.height + frame.width
+    else:
+        frameRF = 2 × (frame.width + frame.height)
     breakdown.frame = { rf: frameRF, rate: sectionRate, cost: frameRF × sectionRate }
     
     # 2. Walk all splits → split/mullion/transom cost
@@ -480,8 +602,9 @@ function priceDesign(tree):
         if region.isLeaf:
             paneSpec = region.paneSpec
             
-            # Structural pane cost (shutter / door regions only)
-            if region.regionType in ("shutter", "door") and paneSpec:
+            # Structural pane cost — shutter regions only.
+            # door regions have NO pane (§4A.2); their steel is the chowkhat frame.
+            if region.regionType == "shutter" and paneSpec:
                 paneRF = 2 × (region.width + region.height)
                 paneRate = lookupShutterRate(paneSpec.shutterMaterial)
                 regionBreakdown.paneStructure = paneRF × paneRate
@@ -501,8 +624,9 @@ function priceDesign(tree):
                 hwCost = hw.quantity × lookupHardwareRate(hw.type, hw.variant)
                 regionBreakdown.hardware.append(hwCost)
         
-        # 3b. Grill overlay costs (leaf OR branch — SS grill can be on branch)
-        for each overlay in region.overlays:
+        # 3b. Grill overlay costs (leaf OR branch — SS grill can be on branch).
+        #     `door` regions never carry grill (§4A.2) — skip them.
+        for each overlay in region.overlays where region.regionType != "door":
             if overlay.material == "MS_SQUARE":
                 # MS grill: area-based (leaf only, enforced by invariants)
                 cost = region.width × region.height × lookupRate("GRILL_MS_SQUARE")
@@ -584,9 +708,9 @@ Rates are resolved from a `RateConfig` table using a deterministic item code:
 ### 10.3 User changes a region's type
 1. The new type is set.
 2. If changing TO `shutter`: auto-add hinges (window hinge logic, R-4). Clear paneSpec, user must configure.
-3. If changing TO `door`: auto-add hinges (door hinge logic, R-5). Clear paneSpec, user must configure.
+3. If changing TO `door`: auto-add hinges (door hinge logic, R-5). paneSpec stays `null` and any grill overlay is removed — a door has no pane or grill (§4A.2). User sets hand / rebate / hardware.
 4. If changing FROM `shutter` or `door`: remove hinges and lock hardware. Clear paneSpec.
-5. Grill overlay is NOT affected by type change — it remains.
+5. Grill overlay is NOT affected by type change — it remains. **Exception:** a `door` region never keeps a grill (it is removed, per step 3).
 
 ### 10.4 User sets infill on a region
 1. Validate: region is a leaf with type `shutter` or `fixed`. (`door` regions do not have infill — P-12.)
@@ -645,10 +769,12 @@ The system MUST reject invalid states rather than guessing:
 - **V-9**: Grill overlays must have a valid material selected.
 - **V-10**: If grill placement is ambiguous, require the user to attach grill to a specific region. Never infer.
 - **V-11**: All splits must use the same section size and gauge as the Design root.
-- **V-12**: `shutter` and `door` regions must have a shutter material selected in paneSpec.
+- **V-12**: `shutter` regions must have a shutter material selected in paneSpec. (`door` regions have NO pane — see V-18.)
 - **V-13**: Beading cannot be applied to a region with `infillType: "none"`.
 - **V-14**: Lock cannot be applied to `shutter` (window pane) regions. Only `door` regions.
-- **V-15**: `door` regions must have `infillType: "none"` (solid panel, no infill).
+- **V-16**: `side: "back"` hardware is valid only on a `door` region whose `rebate` is `"double"` (§4A.6). A single-rebate door has no back side.
+- **V-17**: `doorHand` and `rebate` are meaningful only on `door` regions. They are ignored (or rejected) on any other region type.
+- **V-18**: `door` regions carry hardware only — they must NOT have a shutter material, infill, beading (paneSpec is `null`), or any grill overlay (§4A.2).
 
 ---
 
@@ -678,11 +804,32 @@ The system MUST reject invalid states rather than guessing:
 
 The geometry tree is serialized as a nested JSON object:
 
+> A `"window"` product omits `productType` or sets it to `"window"`. A door product
+> sets `"productType": "door"` and typically has a `door` region carrying `doorHand`
+> and `rebate` (and may have `side: "back"` hardware when double-rebate). Example
+> door region:
+>
+> ```json
+> {
+>   "type": "region", "isLeaf": true, "regionType": "door",
+>   "doorHand": "left", "rebate": "double",
+>   "paneSpec": null,
+>   "overlays": [],
+>   "hardware": [
+>     { "type": "hardware", "hardwareType": "hinge", "variant": "SS_12G", "quantity": 3, "side": "front" },
+>     { "type": "hardware", "hardwareType": "lock",  "variant": "standard", "quantity": 1, "side": "front" },
+>     { "type": "hardware", "hardwareType": "hinge", "variant": "SS_12G", "quantity": 3, "side": "back" }
+>   ]
+> }
+> ```
+> (A door region has no pane, infill, beading, or grill — only hardware, §4A.2.)
+
 ```json
 {
   "id": "uuid",
   "type": "design",
   "name": "Kitchen Window",
+  "productType": "window",
   "outerWidth": 5.0,
   "outerHeight": 4.0,
   "sectionSize": "5",
@@ -810,7 +957,10 @@ These assumptions are made to remove ambiguity. If any are wrong, update this sp
 21. **v1: Bay window extra** is modeled as a design-level flag/add-on with cost = `totalRF × 40` (where totalRF = frame perimeter + all split lengths). Note: bay window is physically a 3D construct — full 3D bay window modeling is planned for v2+.
 22. **One design = one frame.** Multi-frame designs are modeled as separate Design documents.
 23. **Hinge count auto-calculation** uses the leaf region's height, not the overall frame height.
-24. **Door regions are solid panels.** They do not have glass or jali infill in the current model.
+24. **Door regions carry hardware only (§4A.2).** A `door` region has no pane (no shutter material), no infill, no beading, and no grill. The door leaf is not priced separately — the chowkhat frame carries its steel.
+25. **Door product base is in the concrete (§4A.1).** A `productType: "door"` design's outer FRAME is 3-sided — `2 × height + width` — never billing the bottom run (it sits in the concrete). Window products are unchanged.
+26. **Rebate is price-neutral (§4A.5).** Single and double rebate cost the same; double rebate only permits `side: "back"` hardware.
+27. **Door hand is cosmetic (§4A.4).** `doorHand` (`left`/`right`) affects drawing only, never price.
 
 ---
 

@@ -56,14 +56,27 @@ def _section_rate(section_size: str, gauge: str, rates: RateDict) -> float:
 
 # ─── Frame cost (§9.1 step 1) ─────────────────────────────────────
 
-def _compute_frame_cost(frame: dict, rate: float) -> dict:
-    """Frame cost = perimeter × section rate."""
+def _compute_frame_cost(frame: dict, rate: float, product_type: str = "window") -> dict:
+    """
+    Frame cost = running feet × section rate.
+
+    Window (default): full perimeter, 2 × (w + h).
+    Door (§4A.1): the base sits in the concrete, so the frame is 3-sided —
+    2 × height + width (two jambs + head, no sill).
+    """
     w, h = frame["width"], frame["height"]
-    rf = _round2(2 * (w + h))
+    if product_type == "door":
+        rf = _round2(2 * h + w)
+        label = "Door frame (base in concrete)"
+        description = f"Door frame {rf} RFT (2×H + W, base excluded) × ₹{rate}/RFT"
+    else:
+        rf = _round2(2 * (w + h))
+        label = "Frame"
+        description = f"Frame perimeter {rf} RFT × ₹{rate}/RFT"
     cost = _round2(rf * rate)
     return {
-        "label": "Frame",
-        "description": f"Frame perimeter {rf} RFT × ₹{rate}/RFT",
+        "label": label,
+        "description": description,
         "quantity": rf,
         "unit": "RFT",
         "rate": rate,
@@ -131,12 +144,15 @@ def _compute_split_costs(splits: list[dict], rate: float) -> list[dict]:
 
 def _compute_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
     """
-    Structural pane cost for shutter/door regions.
+    Structural pane cost — `shutter` regions only.
     pane_RF = 2 × (width + height), cost = pane_RF × shutter_material_rate.
-    Fixed regions do NOT have structural pane cost (P-4).
+
+    `door` regions have NO structural pane (§4A.2): a door leaf is not priced
+    separately — the chowkhat frame's 3-sided running feet (§4A.1) carries the
+    door's steel. `fixed`/`open`/`louver` have no pane either (P-4/P-5).
     """
     rt = region.get("regionType")
-    if rt not in ("shutter", "door"):
+    if rt != "shutter":
         return None
 
     ps = region.get("paneSpec")
@@ -153,11 +169,10 @@ def _compute_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
     cost = _round2(rf * rate)
 
     mat_label = "MS Pipe" if mat == "MS_PIPE" else "GP Sheet"
-    type_label = "Shutter" if rt == "shutter" else "Door"
 
     return {
-        "label": f"{type_label} pane ({mat_label})",
-        "description": f"{type_label} pane {rf} RFT × ₹{rate}/RFT",
+        "label": f"Shutter pane ({mat_label})",
+        "description": f"Shutter pane {rf} RFT × ₹{rate}/RFT",
         "quantity": rf,
         "unit": "RFT",
         "rate": rate,
@@ -281,12 +296,15 @@ def _compute_hardware(region: dict, rates: RateDict) -> list[dict]:
         hw_type = hw.get("hardwareType")
         variant = hw.get("variant", "")
         qty = hw.get("quantity", 0)
+        # Back-side hardware on a double-rebate door (§4A.6). Cosmetic suffix only —
+        # priced identically to front-side hardware.
+        side_suffix = " — back side" if hw.get("side") == "back" else ""
 
         if hw_type == "hinge":
             rate = _lookup_rate(f"HINGE_{variant}", rates)
             cost = _round2(qty * rate)
             items.append({
-                "label": f"Hinge ({variant.replace('_', ' ')})",
+                "label": f"Hinge ({variant.replace('_', ' ')}){side_suffix}",
                 "description": f"{qty} × ₹{rate}/pc",
                 "quantity": qty,
                 "unit": "pc",
@@ -297,7 +315,7 @@ def _compute_hardware(region: dict, rates: RateDict) -> list[dict]:
             rate = _lookup_rate("LOCK_PROVISION", rates)
             cost = _round2(qty * rate)
             items.append({
-                "label": "Lock provision",
+                "label": f"Lock provision{side_suffix}",
                 "description": f"{qty} × ₹{rate}/pc",
                 "quantity": qty,
                 "unit": "pc",
@@ -317,6 +335,7 @@ def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dic
 
     For leaf regions: computes pane, infill, beading, hardware costs.
     For all regions: computes grill overlay costs (SS grill can be on branch).
+    `door` regions carry hardware only — no pane, infill, beading, or grill (§4A.2).
     """
     results = []
     is_leaf = region.get("isLeaf", True)
@@ -363,12 +382,14 @@ def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dic
         for hw in hw_items:
             sub += hw["cost"]
 
-    # 3b. Grill overlay costs (leaf OR branch — SS grill continuity model)
-    for overlay in region.get("overlays", []):
-        grill = _compute_grill(overlay, region, rates)
-        if grill:
-            region_bd["grill"] = grill
-            sub += grill["cost"]
+    # 3b. Grill overlay costs (leaf OR branch — SS grill continuity model).
+    #     `door` regions never carry grill (§4A.2), so skip them defensively.
+    if rt != "door":
+        for overlay in region.get("overlays", []):
+            grill = _compute_grill(overlay, region, rates)
+            if grill:
+                region_bd["grill"] = grill
+                sub += grill["cost"]
 
     region_bd["subtotal"] = _round2(sub)
 
@@ -409,12 +430,14 @@ def price_design(
     section_size = tree["sectionSize"]
     gauge = tree["gauge"]
     sec_rate = _section_rate(section_size, gauge, rates)
+    # "window" (default) or "door" — selects the 3-sided concrete-base rules (§4A).
+    product_type = tree.get("productType", "window")
 
     frame = tree["frame"]
     root_region = frame["rootRegion"]
 
     # 1. Frame cost
-    frame_item = _compute_frame_cost(frame, sec_rate)
+    frame_item = _compute_frame_cost(frame, sec_rate, product_type)
 
     # 2. Collect and price all splits
     raw_splits = _collect_splits(root_region)

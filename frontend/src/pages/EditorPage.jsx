@@ -282,6 +282,11 @@ export default function EditorPage() {
                 Section {tree.sectionSize}" {tree.gauge}
               </span>
             </div>
+            {tree.productType === 'door' && (
+              <div className="badge badge-accent" style={{ marginTop: 8 }}>
+                Door · base in concrete (2×H + W)
+              </div>
+            )}
           </div>
         )}
 
