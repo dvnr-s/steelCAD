@@ -31,8 +31,10 @@ async def lifespan(app: FastAPI):
     """Validate secrets, create tables on startup. Use Alembic in production."""
     settings.validate_production_secrets()
     logger.info("SteelCAD API starting up (env=%s)", settings.APP_ENV)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    if not settings.is_production:
+        # Dev convenience: auto-create tables. Production uses `alembic upgrade head`.
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     logger.info("Startup complete — API ready")
     yield
     await engine.dispose()

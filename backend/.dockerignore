@@ -5,4 +5,4 @@ __pycache__/
 *.pyo
 .pytest_cache/
 .env
-migrations/
+# migrations/ intentionally NOT excluded — migrations must ship in the image
