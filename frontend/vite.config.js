@@ -12,7 +12,13 @@ export default defineConfig({
       '/estimates': 'http://localhost:8000',
       '/price': 'http://localhost:8000',
       '/rates': 'http://localhost:8000',
+      '/users': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
     },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: [],
   },
 })
