@@ -7,9 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.rate import Rate
-from app.models.user import User
+from app.models.user import User, ROLE_ADMIN, ROLE_OWNER
 from app.schemas.rate import RateResponse, RateUpdate
-from app.services.auth import get_current_user, require_admin
+from app.services.auth import get_current_user, require_role
 from app.services.pricing import DEFAULT_RATES
 
 router = APIRouter(prefix="/rates", tags=["Rates"])
@@ -33,7 +33,7 @@ async def update_rate(
     item_code: str,
     data: RateUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
     result = await db.execute(select(Rate).where(Rate.item_code == item_code))
     rate = result.scalar_one_or_none()
@@ -56,7 +56,7 @@ async def update_rate(
 )
 async def seed_rates(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
     """Populate the rates table with default values. Skips existing item codes."""
     created = 0

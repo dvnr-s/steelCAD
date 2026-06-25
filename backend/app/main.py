@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse
 from app.database import engine, Base
 from app.logging_config import configure_logging, get_logger
 from app.models import User, Design, Customer, Estimate, EstimateFrame, Rate  # noqa: F401 — ensure models registered
-from app.routers import auth, designs, estimates, rates, customers
+from app.routers import auth, designs, estimates, rates, customers, users
 
 configure_logging()
 logger = get_logger("steelcad")
@@ -93,6 +93,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 # ─── Routers ───────────────────────────────────────────────────────
 app.include_router(auth.router)
+app.include_router(users.router)
 app.include_router(designs.router)
 app.include_router(customers.router)
 app.include_router(estimates.router)

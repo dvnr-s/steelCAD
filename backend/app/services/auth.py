@@ -2,6 +2,7 @@
 Authentication service — JWT creation/validation, password hashing, FastAPI dependencies.
 """
 from datetime import datetime, timedelta, timezone
+from typing import Callable
 
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -21,33 +22,28 @@ security = HTTPBearer()
 # ─── Password utilities ────────────────────────────────────────────
 
 def hash_password(password: str) -> str:
-    """Hash a plaintext password with bcrypt."""
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
-    """Verify a plaintext password against a bcrypt hash."""
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
 
 
 # ─── JWT utilities ─────────────────────────────────────────────────
 
 def create_access_token(user_id: str) -> str:
-    """Create a short-lived access token (15 min default)."""
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {"sub": user_id, "exp": expire, "type": "access"}
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 def create_refresh_token(user_id: str) -> str:
-    """Create a long-lived refresh token (7 days default)."""
     expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     payload = {"sub": user_id, "exp": expire, "type": "refresh"}
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
 def decode_token(token: str) -> dict:
-    """Decode and validate a JWT. Raises 401 on invalid/expired tokens."""
     try:
         payload = jwt.decode(
             token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM]
@@ -66,10 +62,7 @@ async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """
-    Dependency — extract and validate the current user from the Bearer token.
-    Raises 401 if token is invalid, expired, or user not found.
-    """
+    """Validate Bearer token and return the authenticated User."""
     payload = decode_token(credentials.credentials)
     if payload.get("type") != "access":
         raise HTTPException(
@@ -92,11 +85,23 @@ async def get_current_user(
     return user
 
 
-async def require_admin(user: User = Depends(get_current_user)) -> User:
-    """Dependency — ensures the current user has admin privileges."""
-    if not user.is_admin:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
-        )
-    return user
+def require_role(*roles: str) -> Callable:
+    """
+    Dependency factory — returns a FastAPI dependency that ensures the
+    current user has one of the specified roles.
+
+    Usage:
+        user: User = Depends(require_role("admin", "owner"))
+    """
+    async def dependency(user: User = Depends(get_current_user)) -> User:
+        if user.role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access restricted to: {', '.join(roles)}",
+            )
+        return user
+    return dependency
+
+
+# Back-compat alias — existing callers of require_admin continue to work.
+require_admin = require_role("admin", "owner")
