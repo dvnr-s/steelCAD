@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { estimatesApi, designsApi } from '../api/client'
 import { makeEmptyTree } from '../store/editorStore'
 import TopNav from '../components/TopNav'
+import { useConfirm } from '../components/ConfirmModal'
 
 const money = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const rupee = (n) => `₹${Number(n).toLocaleString('en-IN')}`
@@ -152,6 +153,7 @@ export default function EstimateBuilderPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [terms, setTerms] = useState({ title: '', notes: '', discount_type: '', discount_value: 0, advance_pct: 50 })
+  const { confirm, ConfirmDialog } = useConfirm()
 
   const applyEstimate = (data) => {
     setEst(data)
@@ -219,7 +221,7 @@ export default function EstimateBuilderPage() {
   }
 
   const deleteFrame = async (frameId) => {
-    if (!confirm('Remove this frame from the estimate?')) return
+    if (!await confirm('Remove this frame from the estimate?', { title: 'Remove Frame', confirmLabel: 'Remove' })) return
     try {
       const { data } = await estimatesApi.deleteFrame(id, frameId)
       applyEstimate(data)
@@ -402,6 +404,7 @@ export default function EstimateBuilderPage() {
       {showAdd && (
         <AddFrameModal estimateId={id} onClose={() => setShowAdd(false)} onAdded={(data) => { applyEstimate(data); setShowAdd(false) }} />
       )}
+      {ConfirmDialog}
     </div>
   )
 }

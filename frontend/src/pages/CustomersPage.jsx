@@ -4,6 +4,7 @@ import { Plus, Trash2, Users, FileText, X, Phone, Building2 } from 'lucide-react
 import toast from 'react-hot-toast'
 import { customersApi } from '../api/client'
 import TopNav from '../components/TopNav'
+import { useConfirm } from '../components/ConfirmModal'
 
 function NewCustomerModal({ onClose, onCreated }) {
   const [form, setForm] = useState({ name: '', company: '', phone: '', email: '', address: '', gstin: '' })
@@ -64,6 +65,7 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
+  const { confirm, ConfirmDialog } = useConfirm()
 
   const load = async () => {
     try {
@@ -79,7 +81,7 @@ export default function CustomersPage() {
 
   const handleDelete = async (e, c) => {
     e.stopPropagation()
-    if (!confirm(`Delete "${c.name}" and all their estimates? This cannot be undone.`)) return
+    if (!await confirm(`Delete "${c.name}" and all their estimates? This cannot be undone.`, { title: 'Delete Customer', confirmLabel: 'Delete' })) return
     try {
       await customersApi.delete(c.id)
       setCustomers((prev) => prev.filter((x) => x.id !== c.id))
@@ -90,6 +92,8 @@ export default function CustomersPage() {
   }
 
   return (
+    <>
+    {ConfirmDialog}
     <div className="dashboard-layout">
       <TopNav />
       <main className="dashboard-main">
@@ -148,5 +152,6 @@ export default function CustomersPage() {
         />
       )}
     </div>
+    </>
   )
 }

@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, UserCheck, Trash2, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { usersApi } from '../api/client'
 import useAuthStore from '../store/authStore'
+import { useConfirm } from '../components/ConfirmModal'
 
 const ROLE_LABELS = { admin: 'Admin', owner: 'Owner', sales: 'Sales' }
 const ROLE_COLORS = {
@@ -127,6 +128,7 @@ export default function UsersPage() {
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showInvite, setShowInvite] = useState(false)
+  const { confirm, ConfirmDialog } = useConfirm()
   const [updatingRole, setUpdatingRole] = useState(null)
   const [deletingId, setDeletingId] = useState(null)
 
@@ -154,7 +156,7 @@ export default function UsersPage() {
   }
 
   const handleDelete = async (user) => {
-    if (!window.confirm(`Delete ${user.name}? This cannot be undone.`)) return
+    if (!await confirm(`Delete ${user.name}? This cannot be undone.`, { title: 'Delete User', confirmLabel: 'Delete' })) return
     setDeletingId(user.id)
     try {
       await usersApi.delete(user.id)
@@ -289,6 +291,7 @@ export default function UsersPage() {
           onCreated={(user) => setUsers((prev) => [...prev, user])}
         />
       )}
+      {ConfirmDialog}
     </div>
   )
 }

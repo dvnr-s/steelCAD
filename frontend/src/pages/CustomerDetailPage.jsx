@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, FileText, Trash2, Clock } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { customersApi, estimatesApi } from '../api/client'
 import TopNav from '../components/TopNav'
+import { useConfirm } from '../components/ConfirmModal'
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -15,6 +16,7 @@ export default function CustomerDetailPage() {
   const navigate = useNavigate()
   const [customer, setCustomer] = useState(null)
   const [estimates, setEstimates] = useState([])
+  const { confirm, ConfirmDialog } = useConfirm()
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
 
@@ -48,7 +50,7 @@ export default function CustomerDetailPage() {
 
   const handleDelete = async (e, est) => {
     e.stopPropagation()
-    if (!confirm(`Delete estimate EST-${String(est.number).padStart(4, '0')}?`)) return
+    if (!await confirm(`Delete estimate EST-${String(est.number).padStart(4, '0')}?`, { title: 'Delete Estimate', confirmLabel: 'Delete' })) return
     try {
       await estimatesApi.delete(est.id)
       setEstimates((prev) => prev.filter((x) => x.id !== est.id))
@@ -137,6 +139,7 @@ export default function CustomerDetailPage() {
           </div>
         )}
       </main>
+      {ConfirmDialog}
     </div>
   )
 }
