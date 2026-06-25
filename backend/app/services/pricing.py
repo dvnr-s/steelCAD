@@ -40,6 +40,11 @@ def _round_rupee(value: float) -> int:
     return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def _fmt_ft(value: float) -> str:
+    """Feet value for display: 2-decimal round, trailing zeros dropped (4.0 → '4')."""
+    return f"{round(float(value), 2):g}"
+
+
 # ─── Rate lookup ───────────────────────────────────────────────────
 
 def _lookup_rate(key: str, rates: RateDict) -> float:
@@ -438,7 +443,7 @@ def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dic
         "region_id": str(region.get("id", "")),
         "region_label": "",
         "region_type": rt or "branch",
-        "dimensions": f"{w}ft × {h}ft",
+        "dimensions": f"{_fmt_ft(h)}ft × {_fmt_ft(w)}ft",
         "pane_structure": None,
         "infill": None,
         "beading": None,

@@ -1,0 +1,1361 @@
+﻿diff --git a/backend/app/routers/designs.py b/backend/app/routers/designs.py
+index e8a7f2f..b5b408b 100644
+--- a/backend/app/routers/designs.py
++++ b/backend/app/routers/designs.py
+@@ -58,6 +58,7 @@ async def list_designs(
+             id=d.id,
+             name=d.name,
+             description=d.description,
++            product_type=(d.tree_json or {}).get("productType", "window"),
+             outer_width=float(d.outer_width),
+             outer_height=float(d.outer_height),
+             section_size=d.section_size,
+diff --git a/backend/app/schemas/design.py b/backend/app/schemas/design.py
+index ae2f8e0..f5377bd 100644
+--- a/backend/app/schemas/design.py
++++ b/backend/app/schemas/design.py
+@@ -30,13 +30,18 @@ class GrillOverlay(BaseModel):
+ 
+ 
+ class Hardware(BaseModel):
+-    """Hardware attachment on a leaf region (spec ┬º7)."""
++    """Hardware attachment on a leaf region (spec ┬º7).
++
++    `side` distinguishes front- vs back-side hardware on a door (spec ┬º4A.6).
++    `back` is only valid on a double-rebate door region (validated server-side).
++    """
+     id: UUID
+     type: Literal["hardware"] = "hardware"
+     hardwareType: Literal["hinge", "lock"]
+     variant: str
+     quantity: int = Field(ge=1)
+     autoComputed: bool = True
++    side: Literal["front", "back"] = "front"
+ 
+ 
+ # ΓöÇΓöÇΓöÇ Tree node schemas (recursive) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+@@ -59,6 +64,9 @@ class Region(BaseModel):
+     overlays: list[GrillOverlay] = []
+     hardware: list[Hardware] = []
+     split: Optional[Split] = None
++    # Door-region-only labelling (spec ┬º4A). Cosmetic hand + rebate selector.
++    doorHand: Optional[Literal["left", "right"]] = None
++    rebate: Literal["single", "double"] = "single"
+ 
+ 
+ class Split(BaseModel):
+@@ -95,6 +103,7 @@ class DesignTree(BaseModel):
+     id: UUID
+     type: Literal["design"] = "design"
+     name: str
++    productType: Literal["window", "door"] = "window"
+     outerWidth: float = Field(ge=1)
+     outerHeight: float = Field(ge=1)
+     sectionSize: Literal["5", "6", "10"]
+@@ -108,6 +117,7 @@ class DesignCreate(BaseModel):
+     """Request body for creating a new design."""
+     name: str
+     description: Optional[str] = None
++    productType: Literal["window", "door"] = "window"
+     outerWidth: float = Field(ge=1)
+     outerHeight: float = Field(ge=1)
+     sectionSize: Literal["5", "6", "10"] = "5"
+@@ -145,6 +155,7 @@ class DesignListItem(BaseModel):
+     id: UUID
+     name: str
+     description: Optional[str]
++    product_type: str = "window"
+     outer_width: float
+     outer_height: float
+     section_size: str
+diff --git a/backend/app/services/pricing.py b/backend/app/services/pricing.py
+index 6c8f72e..e663b14 100644
+--- a/backend/app/services/pricing.py
++++ b/backend/app/services/pricing.py
+@@ -56,14 +56,27 @@ def _section_rate(section_size: str, gauge: str, rates: RateDict) -> float:
+ 
+ # ΓöÇΓöÇΓöÇ Frame cost (┬º9.1 step 1) ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
+ 
+-def _compute_frame_cost(frame: dict, rate: float) -> dict:
+-    """Frame cost = perimeter ├ù section rate."""
++def _compute_frame_cost(frame: dict, rate: float, product_type: str = "window") -> dict:
++    """
++    Frame cost = running feet ├ù section rate.
++
++    Window (default): full perimeter, 2 ├ù (w + h).
++    Door (┬º4A.1): the base sits in the concrete, so the frame is 3-sided ΓÇö
++    2 ├ù height + width (two jambs + head, no sill).
++    """
+     w, h = frame["width"], frame["height"]
+-    rf = _round2(2 * (w + h))
++    if product_type == "door":
++        rf = _round2(2 * h + w)
++        label = "Door frame (base in concrete)"
++        description = f"Door frame {rf} RFT (2├ùH + W, base excluded) ├ù Γé╣{rate}/RFT"
++    else:
++        rf = _round2(2 * (w + h))
++        label = "Frame"
++        description = f"Frame perimeter {rf} RFT ├ù Γé╣{rate}/RFT"
+     cost = _round2(rf * rate)
+     return {
+-        "label": "Frame",
+-        "description": f"Frame perimeter {rf} RFT ├ù Γé╣{rate}/RFT",
++        "label": label,
++        "description": description,
+         "quantity": rf,
+         "unit": "RFT",
+         "rate": rate,
+@@ -131,12 +144,15 @@ def _compute_split_costs(splits: list[dict], rate: float) -> list[dict]:
+ 
+ def _compute_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
+     """
+-    Structural pane cost for shutter/door regions.
++    Structural pane cost ΓÇö `shutter` regions only.
+     pane_RF = 2 ├ù (width + height), cost = pane_RF ├ù shutter_material_rate.
+-    Fixed regions do NOT have structural pane cost (P-4).
++
++    `door` regions have NO structural pane (┬º4A.2): a door leaf is not priced
++    separately ΓÇö the chowkhat frame's 3-sided running feet (┬º4A.1) carries the
++    door's steel. `fixed`/`open`/`louver` have no pane either (P-4/P-5).
+     """
+     rt = region.get("regionType")
+-    if rt not in ("shutter", "door"):
++    if rt != "shutter":
+         return None
+ 
+     ps = region.get("paneSpec")
+@@ -153,11 +169,10 @@ def _compute_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
+     cost = _round2(rf * rate)
+ 
+     mat_label = "MS Pipe" if mat == "MS_PIPE" else "GP Sheet"
+-    type_label = "Shutter" if rt == "shutter" else "Door"
+ 
+     return {
+-        "label": f"{type_label} pane ({mat_label})",
+-        "description": f"{type_label} pane {rf} RFT ├ù Γé╣{rate}/RFT",
++        "label": f"Shutter pane ({mat_label})",
++        "description": f"Shutter pane {rf} RFT ├ù Γé╣{rate}/RFT",
+         "quantity": rf,
+         "unit": "RFT",
+         "rate": rate,
+@@ -281,12 +296,15 @@ def _compute_hardware(region: dict, rates: RateDict) -> list[dict]:
+         hw_type = hw.get("hardwareType")
+         variant = hw.get("variant", "")
+         qty = hw.get("quantity", 0)
++        # Back-side hardware on a double-rebate door (┬º4A.6). Cosmetic suffix only ΓÇö
++        # priced identically to front-side hardware.
++        side_suffix = " ΓÇö back side" if hw.get("side") == "back" else ""
+ 
+         if hw_type == "hinge":
+             rate = _lookup_rate(f"HINGE_{variant}", rates)
+             cost = _round2(qty * rate)
+             items.append({
+-                "label": f"Hinge ({variant.replace('_', ' ')})",
++                "label": f"Hinge ({variant.replace('_', ' ')}){side_suffix}",
+                 "description": f"{qty} ├ù Γé╣{rate}/pc",
+                 "quantity": qty,
+                 "unit": "pc",
+@@ -297,7 +315,7 @@ def _compute_hardware(region: dict, rates: RateDict) -> list[dict]:
+             rate = _lookup_rate("LOCK_PROVISION", rates)
+             cost = _round2(qty * rate)
+             items.append({
+-                "label": "Lock provision",
++                "label": f"Lock provision{side_suffix}",
+                 "description": f"{qty} ├ù Γé╣{rate}/pc",
+                 "quantity": qty,
+                 "unit": "pc",
+@@ -317,6 +335,7 @@ def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dic
+ 
+     For leaf regions: computes pane, infill, beading, hardware costs.
+     For all regions: computes grill overlay costs (SS grill can be on branch).
++    `door` regions carry hardware only ΓÇö no pane, infill, beading, or grill (┬º4A.2).
+     """
+     results = []
+     is_leaf = region.get("isLeaf", True)
+@@ -363,12 +382,14 @@ def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dic
+         for hw in hw_items:
+             sub += hw["cost"]
+ 
+-    # 3b. Grill overlay costs (leaf OR branch ΓÇö SS grill continuity model)
+-    for overlay in region.get("overlays", []):
+-        grill = _compute_grill(overlay, region, rates)
+-        if grill:
+-            region_bd["grill"] = grill
+-            sub += grill["cost"]
++    # 3b. Grill overlay costs (leaf OR branch ΓÇö SS grill continuity model).
++    #     `door` regions never carry grill (┬º4A.2), so skip them defensively.
++    if rt != "door":
++        for overlay in region.get("overlays", []):
++            grill = _compute_grill(overlay, region, rates)
++            if grill:
++                region_bd["grill"] = grill
++                sub += grill["cost"]
+ 
+     region_bd["subtotal"] = _round2(sub)
+ 
+@@ -409,12 +430,14 @@ def price_design(
+     section_size = tree["sectionSize"]
+     gauge = tree["gauge"]
+     sec_rate = _section_rate(section_size, gauge, rates)
++    # "window" (default) or "door" ΓÇö selects the 3-sided concrete-base rules (┬º4A).
++    product_type = tree.get("productType", "window")
+ 
+     frame = tree["frame"]
+     root_region = frame["rootRegion"]
+ 
+     # 1. Frame cost
+-    frame_item = _compute_frame_cost(frame, sec_rate)
++    frame_item = _compute_frame_cost(frame, sec_rate, product_type)
+ 
+     # 2. Collect and price all splits
+     raw_splits = _collect_splits(root_region)
+diff --git a/backend/app/services/validation.py b/backend/app/services/validation.py
+index 764a75d..32f4f4d 100644
+--- a/backend/app/services/validation.py
++++ b/backend/app/services/validation.py
+@@ -122,10 +122,19 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
+         if infill != "none" or ps.get("hasBeading") or ps.get("shutterMaterial"):
+             errors.append(f"P-5: '{rt}' region {rid} should not have pane specification")
+ 
+-    # V-12: shutter/door must have shutter material
+-    if rt in ("shutter", "door"):
++    # V-12: shutter regions must have a shutter material (door regions do NOT ΓÇö
++    # a door leaf has no pane, see V-18 / ┬º4A.2)
++    if rt == "shutter":
+         if not ps or not ps.get("shutterMaterial"):
+-            errors.append(f"V-12: {rt} region {rid} must have a shutter material selected")
++            errors.append(f"V-12: shutter region {rid} must have a shutter material selected")
++
++    # V-18: door regions carry hardware only ΓÇö no pane (shutter material / infill /
++    # beading) and no grill overlay (┬º4A.2)
++    if rt == "door":
++        if ps and (ps.get("shutterMaterial") or ps.get("infillType", "none") != "none" or ps.get("hasBeading")):
++            errors.append(f"V-18: door region {rid} has no pane (no shutter material, infill, or beading)")
++        if region.get("overlays"):
++            errors.append(f"V-18: door region {rid} cannot have a grill")
+ 
+     # V-5: shutter/door must have at least one hinge
+     if rt in ("shutter", "door"):
+@@ -141,10 +150,20 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
+                 f"Only 'door' regions."
+             )
+ 
+-    # V-15: Door regions must have infillType "none" (solid panel)
+-    if rt == "door" and ps:
+-        if ps.get("infillType", "none") != "none":
+-            errors.append(f"V-15: Door region {rid} must have infillType 'none' (solid panel)")
++    # V-16: Back-side hardware requires a double-rebate door (┬º4A.6)
++    has_back_hw = any(hw.get("side") == "back" for hw in hardware)
++    if has_back_hw and not (rt == "door" and region.get("rebate") == "double"):
++        errors.append(
++            f"V-16: Back-side hardware on region {rid} requires a double-rebate "
++            f"door. A single-rebate door has no back side."
++        )
++
++    # V-17: doorHand / rebate are meaningful only on door regions
++    if rt != "door":
++        if region.get("doorHand"):
++            errors.append(f"V-17: doorHand is only valid on 'door' regions, not '{rt}' region {rid}")
++        if region.get("rebate", "single") != "single":
++            errors.append(f"V-17: rebate is only valid on 'door' regions, not '{rt}' region {rid}")
+ 
+     # V-13: Beading requires infill
+     if ps and ps.get("hasBeading"):
+diff --git a/backend/tests/test_pricing.py b/backend/tests/test_pricing.py
+index 60360a3..6e72026 100644
+--- a/backend/tests/test_pricing.py
++++ b/backend/tests/test_pricing.py
+@@ -294,17 +294,17 @@ def test_ss_grill_continuity():
+ # Test: Door region with GP sheet, hinges, lock
+ # ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+ 
+-def test_door_with_lock():
++def test_door_region_is_hardware_only():
+     """
+-    Spec ┬º13 example: 7ft ├ù 3ft door, GP Sheet.
+-    Pane: 2├ù(7+3)├ù250 = Γé╣5,000
++    ┬º4A.2: a door region has NO pane ΓÇö only hardware.
++    7ft ├ù 3ft door: no pane structure.
+     Hinges (door, Γëñ7ft ΓåÆ 3): 3├ù120 = Γé╣360
+-    Lock: 1├ù100 = Γé╣100
++    Lock: 1├ù100 = Γé╣100  ΓåÆ region subtotal Γé╣460
+     """
+     root = _leaf_region(
+         width=3.0, height=7.0,
+         region_type="door",
+-        pane_spec={"shutterMaterial": "GP_SHEET", "infillType": "none", "hasBeading": False},
++        pane_spec=None,
+         hardware=[
+             {
+                 "id": _uuid(), "type": "hardware",
+@@ -322,13 +322,13 @@ def test_door_with_lock():
+     result = price_design(tree, RATES)
+ 
+     region = result["regions"][0]
+-    # Pane structure: 2├ù(3+7)├ù250 = Γé╣5,000
+-    assert region["pane_structure"]["cost"] == 5000.0
++    # No pane structure for a door region
++    assert region["pane_structure"] is None
+     # Hinges: 3├ù120 = Γé╣360
+     assert region["hardware"][0]["cost"] == 360.0
+     # Lock: 1├ù100 = Γé╣100
+     assert region["hardware"][1]["cost"] == 100.0
+-    assert region["subtotal"] == 5460.0
++    assert region["subtotal"] == 460.0
+ 
+ 
+ # ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+@@ -438,3 +438,153 @@ def test_advance_percentage():
+     assert result["advance_pct"] == 60.0
+     # Grand total: 2549 ΓåÆ 60% = 1529.4 ΓåÆ Γé╣1529
+     assert result["advance_amount"] == 1529
++
++
++# ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
++# Test: Standalone Door product (spec ┬º4A)
++# ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
++
++def _door_tree(width, height, root_region, section_size="5", gauge="18G"):
++    """A design tree with productType 'door'."""
++    tree = _design_tree(width, height, root_region, section_size, gauge)
++    tree["productType"] = "door"
++    return tree
++
++
++def test_door_product_frame_is_three_sided():
++    """
++    ┬º4A.1: a door product's outer frame excludes the base run.
++    3ft ├ù 7ft door frame = 2├ù7 + 3 = 17 RFT ├ù Γé╣120 = Γé╣2,040
++    (a window would be 2├ù(3+7) = 20 RFT ├ù Γé╣120 = Γé╣2,400).
++    """
++    root = _leaf_region(3.0, 7.0, "open")
++    tree = _door_tree(3.0, 7.0, root, "5", "18G")
++
++    result = price_design(tree, RATES)
++
++    assert result["frame"]["quantity"] == 17.0
++    assert result["frame"]["cost"] == 2040.0
++    assert "base in concrete" in result["frame"]["label"].lower()
++
++
++def test_door_leaf_not_priced_separately():
++    """
++    ┬º4A.2: a `door` leaf is not priced separately and has no pane. In a door
++    product the chowkhat frame carries the steel; the door region adds only
++    its hardware.
++    Frame: 2├ù7 + 3 = 17 RFT ├ù 120 = Γé╣2,040. Door region: hinges 3├ù120 = Γé╣360.
++    """
++    root = _leaf_region(
++        3.0, 7.0, "door",
++        pane_spec=None,
++        hardware=[{
++            "id": _uuid(), "type": "hardware", "hardwareType": "hinge",
++            "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "front",
++        }],
++    )
++    tree = _door_tree(3.0, 7.0, root, "5", "18G")
++
++    result = price_design(tree, RATES)
++    region = result["regions"][0]
++    assert region["pane_structure"] is None
++    assert region["subtotal"] == 360.0           # hardware only
++    assert result["frame"]["cost"] == 2040.0     # 3-sided chowkhat carries the steel
++    assert result["subtotal"] == 2400.0          # 2040 frame + 360 hinges
++
++
++def test_door_with_side_window_shared_mullion():
++    """
++    ┬º4A.3: door + side window. The shared mullion is billed once by the window
++    convention (2├ù section). The door leaf excludes its base; the side window
++    (a shutter) keeps full-perimeter window pricing.
++    """
++    door = _leaf_region(
++        3.0, 7.0, "door",
++        pane_spec=None,
++        hardware=[{
++            "id": _uuid(), "type": "hardware", "hardwareType": "hinge",
++            "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "front",
++        }],
++    )
++    window = _leaf_region(
++        3.0, 7.0, "shutter", x=3.0,
++        pane_spec={"shutterMaterial": "MS_PIPE", "infillType": "glass", "hasBeading": False},
++        hardware=[{
++            "id": _uuid(), "type": "hardware", "hardwareType": "hinge",
++            "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "front",
++        }],
++    )
++    root = {
++        "id": _uuid(), "type": "region", "x": 0, "y": 0,
++        "width": 6.0, "height": 7.0, "isLeaf": False, "regionType": None,
++        "paneSpec": None, "overlays": [], "hardware": [],
++        "split": {
++            "id": _uuid(), "type": "split", "direction": "vertical",
++            "position": 0.5, "children": [door, window],
++        },
++    }
++    tree = _door_tree(6.0, 7.0, root, "5", "18G")
++
++    result = price_design(tree, RATES)
++
++    # Frame (door product, 3-sided): 2├ù7 + 6 = 20 RFT ├ù 120 = Γé╣2,400
++    assert result["frame"]["cost"] == 2400.0
++    assert "base in concrete" in result["frame"]["label"].lower()
++    # One mullion, billed once: length 7 ├ù (120├ù2) = Γé╣1,680
++    assert len(result["splits"]) == 1
++    assert result["splits"][0]["cost"] == 1680.0
++    # Door region has no pane ΓÇö hardware only: hinges 3├ù120 = Γé╣360
++    door_bd = result["regions"][0]
++    assert door_bd["pane_structure"] is None
++    assert door_bd["subtotal"] == 360.0
++    # Side window keeps full perimeter (window rules): 2├ù(3+7)├ù100 = 2,000 + hinges 360 = 2,360
++    win_bd = result["regions"][1]
++    assert win_bd["pane_structure"]["cost"] == 2000.0
++    assert win_bd["subtotal"] == 2360.0
++    # Total: 2400 frame + 1680 mullion + 360 door + 2360 window = Γé╣6,800
++    assert result["subtotal"] == 6800.0
++
++
++def test_rebate_is_price_neutral_and_back_side_hardware_adds():
++    """
++    ┬º4A.5/┬º4A.6: single vs double rebate produce the SAME frame price.
++    Double rebate only permits back-side hardware, which is priced as normal.
++    """
++    def door_root(rebate, extra_hw):
++        return _leaf_region(
++            3.0, 7.0, "door",
++            pane_spec=None,
++            hardware=[
++                {"id": _uuid(), "type": "hardware", "hardwareType": "hinge",
++                 "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "front"},
++                *extra_hw,
++            ],
++        ) | {"rebate": rebate}
++
++    single = price_design(_door_tree(3.0, 7.0, door_root("single", [])), RATES)
++    double = price_design(_door_tree(3.0, 7.0, door_root("double", [
++        {"id": _uuid(), "type": "hardware", "hardwareType": "hinge",
++         "variant": "SS_12G", "quantity": 3, "autoComputed": True, "side": "back"},
++        {"id": _uuid(), "type": "hardware", "hardwareType": "lock",
++         "variant": "standard", "quantity": 1, "autoComputed": False, "side": "back"},
++    ])), RATES)
++
++    # Frame price is identical regardless of rebate.
++    assert single["frame"]["cost"] == double["frame"]["cost"] == 2040.0
++    # Back-side hinges (3├ù120=360) + lock (100) = Γé╣460 added.
++    assert double["subtotal"] - single["subtotal"] == 460.0
++    # Back-side line items are labelled.
++    labels = [hw["label"] for hw in double["regions"][0]["hardware"]]
++    assert any("back side" in lbl for lbl in labels)
++
++
++def test_window_product_unchanged_without_product_type():
++    """Regression: a tree with no productType still prices as a window (full perimeter)."""
++    root = _leaf_region(3.0, 7.0, "open")
++    tree = _design_tree(3.0, 7.0, root, "5", "18G")  # no productType key
++    assert "productType" not in tree
++
++    result = price_design(tree, RATES)
++    # Full perimeter: 2├ù(3+7) = 20 ├ù 120 = Γé╣2,400
++    assert result["frame"]["cost"] == 2400.0
++    assert result["frame"]["label"] == "Frame"
+diff --git a/directives/design_rules_spec.md b/directives/design_rules_spec.md
+index 675e794..52b6089 100644
+--- a/directives/design_rules_spec.md
++++ b/directives/design_rules_spec.md
+@@ -1,7 +1,7 @@
+ # SteelCAD ΓÇö Design Rules Spec
+ 
+-> **Status**: Draft v3 ΓÇö pane model added, door type added, grill/infill separated
+-> **Last updated**: 2026-05-25
++> **Status**: Draft v4 ΓÇö standalone Door product added (productType, 3-sided concrete base, rebate, door hand)
++> **Last updated**: 2026-06-23
+ > **Purpose**: Remove all domain ambiguity BEFORE implementation begins.
+ 
+ This document is the single source of truth for the object model, geometry rules, region semantics, pane model, grill attachment, and pricing derivation. No feature code may be written until this spec is internally consistent and approved.
+@@ -183,7 +183,7 @@ A leaf region's `regionType` defines what occupies that space:
+ | `open` | Empty opening, no infill | No | No | No |
+ | `fixed` | Fixed (non-operable) panel | No | Optional (glass / jali) | No |
+ | `shutter` | Operable window pane (hinged) | Yes (RF-based) | Optional (glass / jali) | Hinges (window logic), **NO lock** |
+-| `door` | Operable door leaf (hinged) | Yes (RF-based) | No (solid panel) | Hinges (door logic), optional lock |
++| `door` | Operable door leaf (hinged) | **No** (leaf not priced separately ΓÇö ┬º4A.2) | **No** (no infill, no grill) | Hinges (door logic), optional lock |
+ | `louver` | Ventilation louver | No | No | No |
+ 
+ ### 4.1 Region Type Rules
+@@ -206,6 +206,120 @@ A leaf region's `regionType` defines what occupies that space:
+ 
+ ---
+ 
++## 4A. Standalone Door Product
++
++A **Design** has a top-level `productType`:
++
++```
++productType : "window" | "door"   ΓÇö default "window"
++```
++
++A `"window"` product behaves exactly as the rest of this spec describes (the outer
++frame is a full perimeter, no special base handling). A `"door"` product is a
++real steel door unit (a *chowkhat* + leaf, optionally with a fanlight and side
++panels). It reuses the **entire region tree** ΓÇö splits, region types, panes,
++infill, grill, hardware ΓÇö but adds the door-specific rules below.
++
++> A door product is still ONE Design / ONE Frame (assumption ┬º14.22). Its geometry
++> tree is identical in shape to a window's; only the rules in this section differ.
++
++### 4A.1 The Base Is In The Concrete (3-Sided Frame)
++
++The outer frame of a door product is set into the floor/concrete on its bottom
++edge, so **no steel runs along the base**. The frame is three-sided (two jambs +
++head):
++
++```
++door_frame_RF      = 2 ├ù frame.height + frame.width      (NOT 2 ├ù (w + h))
++door_frame_cost    = door_frame_RF ├ù section_rate
++```
++
++This is the only change to frame pricing. Section size, gauge, and the section
++rate lookup are unchanged.
++
++### 4A.2 The Door Leaf Has No Pane And Is Not Priced Separately
++
++A `door` region is **not** a window shutter. It has:
++
++- **no structural pane** ΓÇö no shutter material (MS pipe / GP sheet) and no RF
++  pane cost. The door's steel is carried entirely by the chowkhat frame (┬º4A.1);
++  the leaf itself adds **no line item**;
++- **no infill** (no glass / jali) and **no beading**;
++- **no grill** of any kind.
++
++A `door` region therefore contributes only its **hardware** (hinges, optional
++lock ΓÇö and on a double rebate, the other-side set, ┬º4A.6) plus the cosmetic hand
++(┬º4A.4) and rebate (┬º4A.5). The chowkhat frame's 3-sided running feet (┬º4A.1) is
++the door's structural cost.
++
++> This corrects the earlier model where a door leaf was priced like a shutter
++> pane. Doors do not carry shutter panes, infill, beading, or grill. Finer
++> door-leaf details (panel make-up, lock styles) are out of scope for this version
++> and will be specified separately.
++
++### 4A.3 Fanlights, Side Panels, and Shared Mullions
++
++- A door product may be subdivided like any window. A **fanlight** (transom above
++  the door) or **side panels** (windows flanking the door) are ordinary regions,
++  typed and priced by the normal window rules (┬º5, ┬º6).
++- **Side panels need not be full height.** A 5 ft window beside a 7 ft door is
++  modelled by splitting the side column horizontally into the window region (top)
++  and an `open` region (bottom stub). `open` regions have zero cost (┬º4), so the
++  masonry below the side window is simply not billed.
++- The **mullion/transom shared between the door and an adjacent window** is a
++  normal `Split` and is priced by the window convention ΓÇö double section, `length
++  ├ù 2 ├ù section_rate` (┬º9.1 step 2). It is billed once, never per side.
++
++### 4A.4 Door Hand (Left / Right)
++
++A `door` region carries an optional hand label:
++
++```
++doorHand : "left" | "right" | null   ΓÇö default null
++```
++
++This is a **labelling / drawing** property only. It has **no pricing effect**. It
++indicates the hinge/handle side for fabrication and is drawn on the canvas as a
++swing indicator.
++
++### 4A.5 Rebate (Single / Double)
++
++A `door` region carries a rebate:
++
++```
++rebate : "single" | "double"   ΓÇö default "single"
++```
++
++- **Rebate does NOT change the frame price.** A single-rebate and a double-rebate
++  door frame cost the same (same section, same `2H + W`).
++- A **double rebate** door is rebated on both faces, which physically allows a
++  second leaf / hardware on the **other (back) side**. Its only effect on the
++  model is to *permit* back-side hardware (┬º4A.6).
++
++### 4A.6 Two-Sided Hardware
++
++Hardware on a `door` region gains an optional side:
++
++```
++side : "front" | "back"   ΓÇö default "front"
++```
++
++- `side: "front"` hardware follows the normal door rules (hinges by R-5, optional
++  lock, ┬º7).
++- `side: "back"` hardware (a second set of hinges and/or a lock for the reverse
++  leaf) is **only valid when `rebate: "double"`**. It is priced identically to
++  front-side hardware ΓÇö per piece, summed into the region total. There is no
++  separate "back side" rate.
++
++### 4A.7 Deferred (v-next)
++
++- **Jali on the other side** (a mesh leaf on the back of a double-rebate door) is
++  intentionally **not** modelled in this version. When added, it will be a
++  back-side leaf priced as structural RF + jali mesh area. Until then, the back
++  side carries hardware only.
++
++---
++
+ ## 5. Pane Model ΓÇö Structural Pane + Infill + Beading
+ 
+ A pane is a **layered object** with three distinct layers that must NEVER be collapsed into one:
+@@ -218,7 +332,7 @@ Pane = Structural Pane Cost + Infill Specification + Optional Beading
+ 
+ | Layer | What it is | Pricing | Applies to |
+ |-------|-----------|---------|------------|
+-| **Structural pane** | The physical shutter/pane frame itself | RF-based: `pane_RF ├ù shutter_material_rate` | `shutter` and `door` regions only |
++| **Structural pane** | The physical shutter/pane frame itself | RF-based: `pane_RF ├ù shutter_material_rate` | `shutter` regions only (door regions have NO pane ΓÇö ┬º4A.2) |
+ | **Infill** | What fills the pane opening | glass = Γé╣0; jali = area-based | `shutter` and `fixed` regions |
+ | **Beading** | Edge trim around the infill | perimeter-based: `pane_perimeter ├ù beading_rate` | Any region with infill (glass OR jali) |
+ 
+@@ -231,8 +345,10 @@ pane_RF = 2 ├ù (region.width + region.height)
+ pane_structure_cost = pane_RF ├ù selected_shutter_material_rate
+ ```
+ 
+-- Applies to `shutter` and `door` regions only.
++- Applies to `shutter` regions only.
+ - `fixed` regions do NOT have structural pane cost (they are held directly by the frame/splits).
++- `door` regions do NOT have structural pane cost either ΓÇö the door leaf is not
++  priced separately (┬º4A.2); the chowkhat frame carries the door's steel.
+ - The shutter material choice (`MS_PIPE` or `GP_SHEET`) is per-region.
+ 
+ ### 5.3 Infill Specification
+@@ -263,11 +379,14 @@ For any region with a pane specification:
+ 
+ ```
+ pane_total =
+-    pane_structure_cost          (shutter/door regions only; 0 for fixed)
++    pane_structure_cost          (shutter regions only; 0 for fixed/door)
+   + infill_cost                  (0 for glass, area-based for jali)
+   + beading_cost                 (0 if no beading)
+ ```
+ 
++> `door` regions have NO pane (┬º4A.2) ΓÇö they are not in this table. A door
++> contributes only hardware; its steel is the chowkhat frame (┬º4A.1).
++
+ **Examples:**
+ 
+ | Region Type | Infill | Beading | Structural | Infill Cost | Beading Cost | Total |
+@@ -277,22 +396,21 @@ pane_total =
+ | `shutter` 3├ù4ft, MS_PIPE | jali | no | Γé╣1,400 | Γé╣1,320 | Γé╣0 | Γé╣2,720 |
+ | `fixed` 3├ù4ft | glass | yes | Γé╣0 | Γé╣0 | Γé╣560 | Γé╣560 |
+ | `fixed` 3├ù4ft | jali | yes | Γé╣0 | Γé╣1,320 | Γé╣560 | Γé╣1,880 |
+-| `door` 7├ù3ft, GP_SHEET | none | no | 2├ù(7+3)├ù250 = Γé╣5,000 | Γé╣0 | Γé╣0 | Γé╣5,000 |
+ 
+ ### 5.6 Pane Rules
+ 
+ - **P-1**: Pane specification is a property of the region, not a separate node.
+ - **P-2**: Only leaf regions may have a pane specification.
+-- **P-3**: `shutter` and `door` regions always have structural pane cost (RF-based), regardless of infill.
++- **P-3**: `shutter` regions always have structural pane cost (RF-based), regardless of infill.
+ - **P-4**: `fixed` regions have NO structural pane cost. They can have infill + beading only.
+-- **P-5**: `open` and `louver` regions have NO pane specification.
++- **P-5**: `open`, `louver`, and `door` regions have NO pane specification. (`door`: see ┬º4A.2 ΓÇö no pane, infill, beading, or grill.)
+ - **P-6**: Glass infill has zero material cost. It is a label only.
+ - **P-7**: Jali infill cost is ADDITIONAL to the structural pane cost. Never replaces it.
+ - **P-8**: Beading can be applied to BOTH glass and jali panes. It is NOT glass-only.
+ - **P-9**: Beading requires infill ΓÇö cannot apply beading to `infillType: "none"`.
+ - **P-10**: Each region's pane specification is independent. Do not merge or infer across regions.
+ - **P-11**: When a region is subdivided, its pane specification is cleared.
+-- **P-12**: `door` regions do not have infill (solid panel). paneSpec.infillType is always `"none"` for doors.
++- **P-12**: `door` regions have NO pane specification at all ΓÇö no shutter material, no infill, no beading, no grill (┬º4A.2). Their `paneSpec` is `null`.
+ 
+ ---
+ 
+@@ -461,8 +579,12 @@ function priceDesign(tree):
+     sectionRate = lookupRate(sectionSize, gauge)
+     
+     # 1. Frame cost
++    #    Window: full perimeter. Door (┬º4A.1): 3-sided, base is in the concrete.
+     frame = tree.frame
+-    frameRF = 2 ├ù (frame.width + frame.height)
++    if tree.productType == "door":
++        frameRF = 2 ├ù frame.height + frame.width
++    else:
++        frameRF = 2 ├ù (frame.width + frame.height)
+     breakdown.frame = { rf: frameRF, rate: sectionRate, cost: frameRF ├ù sectionRate }
+     
+     # 2. Walk all splits ΓåÆ split/mullion/transom cost
+@@ -480,8 +602,9 @@ function priceDesign(tree):
+         if region.isLeaf:
+             paneSpec = region.paneSpec
+             
+-            # Structural pane cost (shutter / door regions only)
+-            if region.regionType in ("shutter", "door") and paneSpec:
++            # Structural pane cost ΓÇö shutter regions only.
++            # door regions have NO pane (┬º4A.2); their steel is the chowkhat frame.
++            if region.regionType == "shutter" and paneSpec:
+                 paneRF = 2 ├ù (region.width + region.height)
+                 paneRate = lookupShutterRate(paneSpec.shutterMaterial)
+                 regionBreakdown.paneStructure = paneRF ├ù paneRate
+@@ -501,8 +624,9 @@ function priceDesign(tree):
+                 hwCost = hw.quantity ├ù lookupHardwareRate(hw.type, hw.variant)
+                 regionBreakdown.hardware.append(hwCost)
+         
+-        # 3b. Grill overlay costs (leaf OR branch ΓÇö SS grill can be on branch)
+-        for each overlay in region.overlays:
++        # 3b. Grill overlay costs (leaf OR branch ΓÇö SS grill can be on branch).
++        #     `door` regions never carry grill (┬º4A.2) ΓÇö skip them.
++        for each overlay in region.overlays where region.regionType != "door":
+             if overlay.material == "MS_SQUARE":
+                 # MS grill: area-based (leaf only, enforced by invariants)
+                 cost = region.width ├ù region.height ├ù lookupRate("GRILL_MS_SQUARE")
+@@ -584,9 +708,9 @@ Rates are resolved from a `RateConfig` table using a deterministic item code:
+ ### 10.3 User changes a region's type
+ 1. The new type is set.
+ 2. If changing TO `shutter`: auto-add hinges (window hinge logic, R-4). Clear paneSpec, user must configure.
+-3. If changing TO `door`: auto-add hinges (door hinge logic, R-5). Clear paneSpec, user must configure.
++3. If changing TO `door`: auto-add hinges (door hinge logic, R-5). paneSpec stays `null` and any grill overlay is removed ΓÇö a door has no pane or grill (┬º4A.2). User sets hand / rebate / hardware.
+ 4. If changing FROM `shutter` or `door`: remove hinges and lock hardware. Clear paneSpec.
+-5. Grill overlay is NOT affected by type change ΓÇö it remains.
++5. Grill overlay is NOT affected by type change ΓÇö it remains. **Exception:** a `door` region never keeps a grill (it is removed, per step 3).
+ 
+ ### 10.4 User sets infill on a region
+ 1. Validate: region is a leaf with type `shutter` or `fixed`. (`door` regions do not have infill ΓÇö P-12.)
+@@ -645,10 +769,12 @@ The system MUST reject invalid states rather than guessing:
+ - **V-9**: Grill overlays must have a valid material selected.
+ - **V-10**: If grill placement is ambiguous, require the user to attach grill to a specific region. Never infer.
+ - **V-11**: All splits must use the same section size and gauge as the Design root.
+-- **V-12**: `shutter` and `door` regions must have a shutter material selected in paneSpec.
++- **V-12**: `shutter` regions must have a shutter material selected in paneSpec. (`door` regions have NO pane ΓÇö see V-18.)
+ - **V-13**: Beading cannot be applied to a region with `infillType: "none"`.
+ - **V-14**: Lock cannot be applied to `shutter` (window pane) regions. Only `door` regions.
+-- **V-15**: `door` regions must have `infillType: "none"` (solid panel, no infill).
++- **V-16**: `side: "back"` hardware is valid only on a `door` region whose `rebate` is `"double"` (┬º4A.6). A single-rebate door has no back side.
++- **V-17**: `doorHand` and `rebate` are meaningful only on `door` regions. They are ignored (or rejected) on any other region type.
++- **V-18**: `door` regions carry hardware only ΓÇö they must NOT have a shutter material, infill, beading (paneSpec is `null`), or any grill overlay (┬º4A.2).
+ 
+ ---
+ 
+@@ -678,11 +804,32 @@ The system MUST reject invalid states rather than guessing:
+ 
+ The geometry tree is serialized as a nested JSON object:
+ 
++> A `"window"` product omits `productType` or sets it to `"window"`. A door product
++> sets `"productType": "door"` and typically has a `door` region carrying `doorHand`
++> and `rebate` (and may have `side: "back"` hardware when double-rebate). Example
++> door region:
++>
++> ```json
++> {
++>   "type": "region", "isLeaf": true, "regionType": "door",
++>   "doorHand": "left", "rebate": "double",
++>   "paneSpec": null,
++>   "overlays": [],
++>   "hardware": [
++>     { "type": "hardware", "hardwareType": "hinge", "variant": "SS_12G", "quantity": 3, "side": "front" },
++>     { "type": "hardware", "hardwareType": "lock",  "variant": "standard", "quantity": 1, "side": "front" },
++>     { "type": "hardware", "hardwareType": "hinge", "variant": "SS_12G", "quantity": 3, "side": "back" }
++>   ]
++> }
++> ```
++> (A door region has no pane, infill, beading, or grill ΓÇö only hardware, ┬º4A.2.)
++
+ ```json
+ {
+   "id": "uuid",
+   "type": "design",
+   "name": "Kitchen Window",
++  "productType": "window",
+   "outerWidth": 5.0,
+   "outerHeight": 4.0,
+   "sectionSize": "5",
+@@ -810,7 +957,10 @@ These assumptions are made to remove ambiguity. If any are wrong, update this sp
+ 21. **v1: Bay window extra** is modeled as a design-level flag/add-on with cost = `totalRF ├ù 40` (where totalRF = frame perimeter + all split lengths). Note: bay window is physically a 3D construct ΓÇö full 3D bay window modeling is planned for v2+.
+ 22. **One design = one frame.** Multi-frame designs are modeled as separate Design documents.
+ 23. **Hinge count auto-calculation** uses the leaf region's height, not the overall frame height.
+-24. **Door regions are solid panels.** They do not have glass or jali infill in the current model.
++24. **Door regions carry hardware only (┬º4A.2).** A `door` region has no pane (no shutter material), no infill, no beading, and no grill. The door leaf is not priced separately ΓÇö the chowkhat frame carries its steel.
++25. **Door product base is in the concrete (┬º4A.1).** A `productType: "door"` design's outer FRAME is 3-sided ΓÇö `2 ├ù height + width` ΓÇö never billing the bottom run (it sits in the concrete). Window products are unchanged.
++26. **Rebate is price-neutral (┬º4A.5).** Single and double rebate cost the same; double rebate only permits `side: "back"` hardware.
++27. **Door hand is cosmetic (┬º4A.4).** `doorHand` (`left`/`right`) affects drawing only, never price.
+ 
+ ---
+ 
+diff --git a/frontend/src/components/DesignCanvas.jsx b/frontend/src/components/DesignCanvas.jsx
+index b4dbd90..7bcfee9 100644
+--- a/frontend/src/components/DesignCanvas.jsx
++++ b/frontend/src/components/DesignCanvas.jsx
+@@ -74,6 +74,32 @@ function regionStroke(region, selectedId) {
+   return '#30363d'
+ }
+ 
++// Standard elevation door symbol: a triangle (two lines) whose apex sits on the
++// hinge edge and base spans the latch edge ΓÇö instantly reads which side opens.
++function DoorSwing({ region, px, py }) {
++  const x = px(region.x), y = py(region.y)
++  const w = region.width * SCALE, h = region.height * SCALE
++  const hingeLeft = (region.doorHand || 'left') !== 'right'
++  const apexX = hingeLeft ? x : x + w
++  const latchX = hingeLeft ? x + w : x
++  const pts = [latchX, y + 4, apexX, y + h / 2, latchX, y + h - 4]
++  return <Line points={pts} stroke="rgba(239,68,68,0.55)" strokeWidth={1.25} listening={false} />
++}
++
++// Hatched "in the concrete" ground band along the bottom edge of a door frame.
++function ConcreteBase({ frame, px, py }) {
++  const x0 = px(0), x1 = px(frame.width), yb = py(frame.height)
++  const ticks = []
++  for (let gx = x0; gx < x1; gx += 12)
++    ticks.push(<Line key={gx} points={[gx, yb, gx + 8, yb + 8]} stroke="rgba(139,124,108,0.55)" strokeWidth={1} listening={false} />)
++  return (
++    <>
++      <Line points={[x0, yb, x1, yb]} stroke="#8b7c6c" strokeWidth={3} listening={false} />
++      {ticks}
++    </>
++  )
++}
++
+ function GrillOverlay({ region, px, py }) {
+   const x = px(region.x), y = py(region.y)
+   const pw = region.width * SCALE, ph = region.height * SCALE
+@@ -171,6 +197,9 @@ export default function DesignCanvas({ width, height }) {
+         {/* Frame outline */}
+         <Rect x={px(0)} y={py(0)} width={fw} height={fh} fill="transparent" stroke="#3b82f6" strokeWidth={3} listening={false} />
+ 
++        {/* Door product: base sits in the concrete (3-sided frame) */}
++        {tree.productType === 'door' && <ConcreteBase frame={frame} px={px} py={py} />}
++
+         {/* Frame dimension labels */}
+         <Text x={px(frame.width / 2) - 20} y={py(0) - 22} text={`${frame.width}ft`} fontSize={11} fill="#8b949e" fontFamily="Inter, sans-serif" listening={false} />
+         <Text x={px(0) - 30} y={py(frame.height / 2) - 8} text={`${frame.height}ft`} fontSize={11} fill="#8b949e" fontFamily="Inter, sans-serif" rotation={-90} listening={false} />
+@@ -199,6 +228,15 @@ export default function DesignCanvas({ width, height }) {
+                   fill="#484f58" fontFamily="JetBrains Mono, monospace" listening={false} />
+               )}
+               {region.overlays?.length > 0 && <GrillOverlay region={region} px={px} py={py} />}
++              {region.isLeaf && region.regionType === 'door' && (
++                <>
++                  <DoorSwing region={region} px={px} py={py} />
++                  {(region.doorHand || region.rebate === 'double') && rw > 40 && (
++                    <Text x={rx + rw - 34} y={ry + 4} text={`${region.doorHand ? region.doorHand[0].toUpperCase() : ''}${region.rebate === 'double' ? ' 2R' : ''}`.trim()}
++                      fontSize={9} fill="#ef4444" fontFamily="JetBrains Mono, monospace" opacity={0.8} listening={false} />
++                  )}
++                </>
++              )}
+             </Group>
+           )
+         })}
+diff --git a/frontend/src/components/NewDesignModal.jsx b/frontend/src/components/NewDesignModal.jsx
+index 2e897aa..bd6a425 100644
+--- a/frontend/src/components/NewDesignModal.jsx
++++ b/frontend/src/components/NewDesignModal.jsx
+@@ -1,10 +1,11 @@
+ import { useState } from 'react'
+-import { X } from 'lucide-react'
++import { X, AppWindow, DoorOpen } from 'lucide-react'
+ import toast from 'react-hot-toast'
+ import { designsApi } from '../api/client'
+ import { makeEmptyTree } from '../store/editorStore'
+ 
+ export default function NewDesignModal({ onClose, onCreate }) {
++  const [productType, setProductType] = useState('window')
+   const [name, setName] = useState('')
+   const [width, setWidth] = useState(5)
+   const [height, setHeight] = useState(4)
+@@ -12,6 +13,13 @@ export default function NewDesignModal({ onClose, onCreate }) {
+   const [gauge, setGauge] = useState('18G')
+   const [loading, setLoading] = useState(false)
+ 
++  // Switching product swaps in sensible default dimensions for that product.
++  const pickProduct = (pt) => {
++    setProductType(pt)
++    if (pt === 'door') { setWidth(3.5); setHeight(7) }
++    else { setWidth(5); setHeight(4) }
++  }
++
+   const handleCreate = async (e) => {
+     e.preventDefault()
+     if (!name.trim()) { toast.error('Design name is required'); return }
+@@ -19,16 +27,17 @@ export default function NewDesignModal({ onClose, onCreate }) {
+ 
+     setLoading(true)
+     try {
+-      const tree = makeEmptyTree(name, Number(width), Number(height), sectionSize, gauge)
++      const tree = makeEmptyTree(name, Number(width), Number(height), sectionSize, gauge, productType)
+       const { data } = await designsApi.create({
+         name: name.trim(),
++        productType,
+         outerWidth: Number(width),
+         outerHeight: Number(height),
+         sectionSize,
+         gauge,
+         tree_json: tree,
+       })
+-      toast.success('Design created!')
++      toast.success(productType === 'door' ? 'Door created!' : 'Design created!')
+       onCreate(data.id)
+     } catch (err) {
+       const detail = err.response?.data?.detail
+@@ -56,7 +65,29 @@ export default function NewDesignModal({ onClose, onCreate }) {
+ 
+         <form onSubmit={handleCreate} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+           <div className="form-group">
+-            <label>Design Name</label>
++            <label>Product</label>
++            <div className="flex gap-2">
++              <button type="button"
++                className={`btn btn-sm w-full ${productType === 'window' ? 'btn-primary' : 'btn-secondary'}`}
++                onClick={() => pickProduct('window')}>
++                <AppWindow size={14} /> Window
++              </button>
++              <button type="button"
++                className={`btn btn-sm w-full ${productType === 'door' ? 'btn-primary' : 'btn-secondary'}`}
++                onClick={() => pickProduct('door')}>
++                <DoorOpen size={14} /> Door
++              </button>
++            </div>
++            {productType === 'door' && (
++              <p className="text-xs text-muted" style={{ marginTop: 6, lineHeight: 1.5 }}>
++                Door frame base sits in the concrete ΓÇö priced as 2├ùheight + width. Add side
++                panels or a fanlight with splits after creating.
++              </p>
++            )}
++          </div>
++
++          <div className="form-group">
++            <label>{productType === 'door' ? 'Door Name' : 'Design Name'}</label>
+             <input
+               type="text"
+               placeholder="e.g. Main Window, Gate Design..."
+diff --git a/frontend/src/components/PropertiesPanel.jsx b/frontend/src/components/PropertiesPanel.jsx
+index d7d6c49..52bfecf 100644
+--- a/frontend/src/components/PropertiesPanel.jsx
++++ b/frontend/src/components/PropertiesPanel.jsx
+@@ -156,26 +156,27 @@ function HardwareEditor({ region }) {
+   const updateRegion = useEditorStore((s) => s.updateRegion)
+   const hardware = region.hardware || []
+   const rt = region.regionType
++  const isDoubleRebate = rt === 'door' && region.rebate === 'double'
+ 
+   if (rt !== 'shutter' && rt !== 'door') {
+     return <p className="text-xs text-muted">Hardware only on shutter/door regions</p>
+   }
+ 
+-  const addHinge = () => {
++  const addHinge = (side = 'front') => {
+     updateRegion(region.id, {
+       hardware: [
+         ...hardware,
+-        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: 2, autoComputed: false },
++        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: 2, autoComputed: false, side },
+       ],
+     })
+   }
+ 
+-  const addLock = () => {
++  const addLock = (side = 'front') => {
+     if (rt !== 'door') return
+     updateRegion(region.id, {
+       hardware: [
+         ...hardware,
+-        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'lock', variant: 'standard', quantity: 1, autoComputed: false },
++        { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'lock', variant: 'standard', quantity: 1, autoComputed: false, side },
+       ],
+     })
+   }
+@@ -186,48 +187,113 @@ function HardwareEditor({ region }) {
+   const updateHw = (id, patch) =>
+     updateRegion(region.id, { hardware: hardware.map((h) => h.id === id ? { ...h, ...patch } : h) })
+ 
++  const HwRow = ({ hw }) => (
++    <div key={hw.id} className="flex items-center gap-2" style={{
++      background: 'var(--c-surface-2)',
++      border: '1px solid var(--c-border)',
++      borderRadius: 'var(--radius)',
++      padding: '6px 8px',
++    }}>
++      <span className="text-xs text-muted" style={{ flex: 1 }}>{hw.hardwareType}</span>
++      {hw.hardwareType === 'hinge' && (
++        <select
++          style={{ width: 100, fontSize: '0.75rem', padding: '2px 6px' }}
++          value={hw.variant}
++          onChange={(e) => updateHw(hw.id, { variant: e.target.value })}
++        >
++          <option value="SS_12G">SS 12G</option>
++          <option value="SS_10G">SS 10G</option>
++        </select>
++      )}
++      <input
++        type="number" min="1" max="10"
++        value={hw.quantity}
++        onChange={(e) => updateHw(hw.id, { quantity: +e.target.value })}
++        style={{ width: 44, fontSize: '0.75rem', padding: '2px 6px' }}
++      />
++      <button className="btn btn-ghost btn-icon" style={{ padding: 2 }}
++        onClick={() => removeHw(hw.id)}>
++        <X size={12} color="var(--c-error)" />
++      </button>
++    </div>
++  )
++
++  // Split hardware by side so a double-rebate door shows front / back groups.
++  const front = hardware.filter((h) => (h.side || 'front') !== 'back')
++  const back = hardware.filter((h) => h.side === 'back')
++
+   return (
+     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+-      {hardware.map((hw) => (
+-        <div key={hw.id} className="flex items-center gap-2" style={{
+-          background: 'var(--c-surface-2)',
+-          border: '1px solid var(--c-border)',
+-          borderRadius: 'var(--radius)',
+-          padding: '6px 8px',
+-        }}>
+-          <span className="text-xs text-muted" style={{ flex: 1 }}>{hw.hardwareType}</span>
+-          {hw.hardwareType === 'hinge' && (
+-            <select
+-              style={{ width: 100, fontSize: '0.75rem', padding: '2px 6px' }}
+-              value={hw.variant}
+-              onChange={(e) => updateHw(hw.id, { variant: e.target.value })}
+-            >
+-              <option value="SS_12G">SS 12G</option>
+-              <option value="SS_10G">SS 10G</option>
+-            </select>
+-          )}
+-          <input
+-            type="number" min="1" max="10"
+-            value={hw.quantity}
+-            onChange={(e) => updateHw(hw.id, { quantity: +e.target.value })}
+-            style={{ width: 44, fontSize: '0.75rem', padding: '2px 6px' }}
+-          />
+-          <button className="btn btn-ghost btn-icon" style={{ padding: 2 }}
+-            onClick={() => removeHw(hw.id)}>
+-            <X size={12} color="var(--c-error)" />
+-          </button>
+-        </div>
+-      ))}
++      {isDoubleRebate && <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Front side</div>}
++      {front.map((hw) => <HwRow key={hw.id} hw={hw} />)}
+       <div className="flex gap-2">
+-        <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={addHinge}>
++        <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addHinge('front')}>
+           <Plus size={12} /> Hinge
+         </button>
+         {rt === 'door' && (
+-          <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={addLock}>
++          <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addLock('front')}>
+             <Plus size={12} /> Lock
+           </button>
+         )}
+       </div>
++
++      {isDoubleRebate && (
++        <>
++          <div className="text-xs text-muted" style={{ fontWeight: 600, marginTop: 6 }}>Other side (back)</div>
++          {back.map((hw) => <HwRow key={hw.id} hw={hw} />)}
++          <div className="flex gap-2">
++            <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addHinge('back')}>
++              <Plus size={12} /> Hinge
++            </button>
++            <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addLock('back')}>
++              <Plus size={12} /> Lock
++            </button>
++          </div>
++        </>
++      )}
++    </div>
++  )
++}
++
++// Door-only options: hand label + rebate (spec ┬º4A.4 / ┬º4A.5).
++function DoorOptionsEditor({ region }) {
++  const updateRegion = useEditorStore((s) => s.updateRegion)
++  const hand = region.doorHand || null
++  const rebate = region.rebate || 'single'
++
++  const setHand = (h) => updateRegion(region.id, { doorHand: hand === h ? null : h })
++
++  const setRebate = (r) => {
++    // Dropping to single rebate strips any back-side hardware (V-16).
++    if (r === 'single') {
++      const hardware = (region.hardware || []).filter((h) => h.side !== 'back')
++      updateRegion(region.id, { rebate: r, hardware })
++    } else {
++      updateRegion(region.id, { rebate: r })
++    }
++  }
++
++  return (
++    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
++      <div className="form-group">
++        <label>Hand</label>
++        <div className="flex gap-2">
++          <button className={`btn btn-sm w-full ${hand === 'left' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setHand('left')}>Left</button>
++          <button className={`btn btn-sm w-full ${hand === 'right' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setHand('right')}>Right</button>
++        </div>
++      </div>
++      <div className="form-group">
++        <label>Rebate</label>
++        <div className="flex gap-2">
++          <button className={`btn btn-sm w-full ${rebate === 'single' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setRebate('single')}>Single</button>
++          <button className={`btn btn-sm w-full ${rebate === 'double' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setRebate('double')}>Double</button>
++        </div>
++        {rebate === 'double' && (
++          <p className="text-xs text-muted" style={{ marginTop: 6, lineHeight: 1.5 }}>
++            Same frame price as single ΓÇö double rebate just lets you add hinges/lock on the other side.
++          </p>
++        )}
++      </div>
+     </div>
+   )
+ }
+@@ -298,7 +364,15 @@ export default function PropertiesPanel() {
+                 key={rt.value}
+                 className={`btn btn-sm ${selected.regionType === rt.value ? 'btn-primary' : 'btn-secondary'}`}
+                 style={selected.regionType === rt.value ? {} : { borderColor: rt.color + '44', color: rt.color }}
+-                onClick={() => updateRegion(selected.id, { regionType: rt.value, paneSpec: null, hardware: [] })}
++                onClick={() => updateRegion(selected.id, {
++                  regionType: rt.value,
++                  paneSpec: null,
++                  hardware: [],
++                  doorHand: null,
++                  rebate: 'single',
++                  // A door has no pane or grill (┬º4A.2) ΓÇö drop any overlay when switching to door.
++                  ...(rt.value === 'door' ? { overlays: [] } : {}),
++                })}
+               >
+                 {rt.label}
+               </button>
+@@ -307,19 +381,29 @@ export default function PropertiesPanel() {
+         </div>
+       )}
+ 
+-      {/* Pane Spec */}
+-      {selected.isLeaf && selected.regionType && (
++      {/* Door options (hand + rebate) */}
++      {selected.isLeaf && selected.regionType === 'door' && (
++        <div className="panel-section">
++          <div className="panel-title">Door Options</div>
++          <DoorOptionsEditor region={selected} />
++        </div>
++      )}
++
++      {/* Pane Spec ΓÇö shutter/fixed only. Door regions have no pane (┬º4A.2). */}
++      {selected.isLeaf && (selected.regionType === 'shutter' || selected.regionType === 'fixed') && (
+         <div className="panel-section">
+           <div className="panel-title">Pane</div>
+           <PaneSpecEditor region={selected} />
+         </div>
+       )}
+ 
+-      {/* Grill */}
+-      <div className="panel-section">
+-        <div className="panel-title">Grill</div>
+-        <GrillEditor region={selected} />
+-      </div>
++      {/* Grill ΓÇö not on door regions (┬º4A.2) */}
++      {selected.regionType !== 'door' && (
++        <div className="panel-section">
++          <div className="panel-title">Grill</div>
++          <GrillEditor region={selected} />
++        </div>
++      )}
+ 
+       {/* Hardware */}
+       {selected.isLeaf && (
+diff --git a/frontend/src/lib/validators.js b/frontend/src/lib/validators.js
+index 322a430..fc342dc 100644
+--- a/frontend/src/lib/validators.js
++++ b/frontend/src/lib/validators.js
+@@ -24,9 +24,19 @@ function pushLeafIssues(region, issues) {
+     issues.push({ id: region.id, message: `Region ${label} is below the 0.5ft minimum` })
+   }
+ 
+-  // V-12: shutter/door require a shutter material
+-  if ((rt === 'shutter' || rt === 'door') && !ps.shutterMaterial) {
+-    issues.push({ id: region.id, message: `${rt} ${label} needs a shutter material` })
++  // V-12: shutter requires a shutter material (door regions have no pane)
++  if (rt === 'shutter' && !ps.shutterMaterial) {
++    issues.push({ id: region.id, message: `shutter ${label} needs a shutter material` })
++  }
++
++  // V-18: door regions carry hardware only ΓÇö no pane (material/infill/beading) or grill
++  if (rt === 'door') {
++    if (ps.shutterMaterial || (ps.infillType && ps.infillType !== 'none') || ps.hasBeading) {
++      issues.push({ id: region.id, message: `Door ${label} has no pane (no material, infill, or beading)` })
++    }
++    if ((region.overlays || []).length > 0) {
++      issues.push({ id: region.id, message: `Door ${label} cannot have a grill` })
++    }
+   }
+ 
+   // V-5: shutter/door require at least one hinge
+@@ -42,9 +52,15 @@ function pushLeafIssues(region, issues) {
+     issues.push({ id: region.id, message: `Lock on ${rt} ${label} ΓÇö locks are door-only` })
+   }
+ 
+-  // V-15: door regions must be solid (infill "none")
+-  if (rt === 'door' && ps.infillType && ps.infillType !== 'none') {
+-    issues.push({ id: region.id, message: `Door ${label} must be a solid panel (no infill)` })
++  // V-16: back-side hardware requires a double-rebate door
++  const hasBack = hardware.some((hw) => hw.side === 'back')
++  if (hasBack && !(rt === 'door' && region.rebate === 'double')) {
++    issues.push({ id: region.id, message: `Back-side hardware on ${label} needs a double-rebate door` })
++  }
++
++  // V-17: doorHand / rebate are meaningful only on door regions
++  if (rt !== 'door' && (region.doorHand || (region.rebate && region.rebate !== 'single'))) {
++    issues.push({ id: region.id, message: `Door hand/rebate set on a ${rt} region ${label}` })
+   }
+ 
+   // V-13: beading requires infill
+diff --git a/frontend/src/pages/DashboardPage.jsx b/frontend/src/pages/DashboardPage.jsx
+index c663e77..b10f1d0 100644
+--- a/frontend/src/pages/DashboardPage.jsx
++++ b/frontend/src/pages/DashboardPage.jsx
+@@ -45,6 +45,7 @@ function DesignCard({ design, onDelete, onOpen }) {
+           {design.name}
+         </div>
+         <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
++          {design.product_type === 'door' && <span className="badge" style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>Door</span>}
+           <span className="badge badge-brand">{design.outer_width}ft ├ù {design.outer_height}ft</span>
+           <span className="badge badge-accent">{design.section_size}" {design.gauge}</span>
+         </div>
+diff --git a/frontend/src/pages/EditorPage.jsx b/frontend/src/pages/EditorPage.jsx
+index bc5f6d3..4bc7c25 100644
+--- a/frontend/src/pages/EditorPage.jsx
++++ b/frontend/src/pages/EditorPage.jsx
+@@ -282,6 +282,11 @@ export default function EditorPage() {
+                 Section {tree.sectionSize}" {tree.gauge}
+               </span>
+             </div>
++            {tree.productType === 'door' && (
++              <div className="badge badge-accent" style={{ marginTop: 8 }}>
++                Door ┬╖ base in concrete (2├ùH + W)
++              </div>
++            )}
+           </div>
+         )}
+ 
+diff --git a/frontend/src/pages/EstimateBuilderPage.jsx b/frontend/src/pages/EstimateBuilderPage.jsx
+index 90d2860..427a13b 100644
+--- a/frontend/src/pages/EstimateBuilderPage.jsx
++++ b/frontend/src/pages/EstimateBuilderPage.jsx
+@@ -1,6 +1,6 @@
+ import { useEffect, useState } from 'react'
+ import { useParams, useNavigate } from 'react-router-dom'
+-import { ArrowLeft, Plus, Trash2, Pencil, Download, X, LayoutGrid, SquarePen } from 'lucide-react'
++import { ArrowLeft, Plus, Trash2, Pencil, Download, X, LayoutGrid, SquarePen, AppWindow, DoorOpen } from 'lucide-react'
+ import toast from 'react-hot-toast'
+ import { estimatesApi, designsApi } from '../api/client'
+ import { makeEmptyTree } from '../store/editorStore'
+@@ -18,10 +18,14 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
+   const [designs, setDesigns] = useState([])
+   const [loadingLib, setLoadingLib] = useState(true)
+   // new frame
+-  const [form, setForm] = useState({ name: '', width: 5, height: 4, sectionSize: '5', gauge: '18G' })
++  const [form, setForm] = useState({ name: '', width: 5, height: 4, sectionSize: '5', gauge: '18G', productType: 'window' })
+   const [quantity, setQuantity] = useState(1)
+   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+ 
++  // Switching product swaps in sensible default dimensions for that product.
++  const pickProduct = (pt) =>
++    setForm((f) => ({ ...f, productType: pt, ...(pt === 'door' ? { width: 3.5, height: 7 } : { width: 5, height: 4 }) }))
++
+   useEffect(() => {
+     designsApi.list({ limit: 100 }).then(({ data }) => setDesigns(data)).catch(() => {}).finally(() => setLoadingLib(false))
+   }, [])
+@@ -43,9 +47,9 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
+     if (!form.name.trim()) { toast.error('Frame name is required'); return }
+     setSaving(true)
+     try {
+-      const tree = makeEmptyTree(form.name.trim(), Number(form.width), Number(form.height), form.sectionSize, form.gauge)
++      const tree = makeEmptyTree(form.name.trim(), Number(form.width), Number(form.height), form.sectionSize, form.gauge, form.productType)
+       const { data } = await estimatesApi.addFrame(estimateId, { name: form.name.trim(), tree_json: tree, quantity: Number(quantity) || 1 })
+-      toast.success('Frame added ΓÇö open it to design')
++      toast.success(form.productType === 'door' ? 'Door added ΓÇö open it to design' : 'Frame added ΓÇö open it to design')
+       onAdded(data)
+     } catch (err) {
+       toast.error(err.response?.data?.detail?.validation_errors?.[0] || 'Failed to add frame')
+@@ -79,8 +83,19 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
+         {tab === 'new' ? (
+           <form onSubmit={addNew} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+             <div className="form-group">
+-              <label>Frame Name</label>
+-              <input value={form.name} onChange={set('name')} placeholder="e.g. Living Room Window" autoFocus required />
++              <label>Product</label>
++              <div className="flex gap-2">
++                <button type="button" className={`btn btn-sm w-full ${form.productType === 'window' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pickProduct('window')}>
++                  <AppWindow size={14} /> Window
++                </button>
++                <button type="button" className={`btn btn-sm w-full ${form.productType === 'door' ? 'btn-primary' : 'btn-secondary'}`} onClick={() => pickProduct('door')}>
++                  <DoorOpen size={14} /> Door
++                </button>
++              </div>
++            </div>
++            <div className="form-group">
++              <label>{form.productType === 'door' ? 'Door Name' : 'Frame Name'}</label>
++              <input value={form.name} onChange={set('name')} placeholder={form.productType === 'door' ? 'e.g. Main Entrance Door' : 'e.g. Living Room Window'} autoFocus required />
+             </div>
+             <div className="flex gap-3">
+               <div className="form-group" style={{ flex: 1 }}><label>Width (ft)</label><input type="number" min="1" max="30" step="0.5" value={form.width} onChange={set('width')} /></div>
+diff --git a/frontend/src/store/editorStore.js b/frontend/src/store/editorStore.js
+index 2c1ee23..324c83d 100644
+--- a/frontend/src/store/editorStore.js
++++ b/frontend/src/store/editorStore.js
+@@ -15,13 +15,30 @@ export const makeLeafRegion = (x, y, w, h) => ({
+   overlays: [],
+   hardware: [],
+   split: null,
++  doorHand: null,        // door-region label only (spec ┬º4A.4)
++  rebate: 'single',      // door-region rebate (spec ┬º4A.5)
+ })
+ 
+-// A new design tree skeleton
+-export const makeEmptyTree = (name, width, height, sectionSize = '5', gauge = '18G') => ({
++// Door hinge auto-count by leaf height (spec R-5 / ┬º4A): Γëñ7ftΓåÆ3, Γëñ8ftΓåÆ4, else 5.
++export const doorHingeCount = (height) => (height <= 7 ? 3 : height <= 8 ? 4 : 5)
++
++// A door leaf pre-typed as a door (used to seed a standalone door product).
++// A door has NO pane/grill (┬º4A.2) ΓÇö only hardware (hinges/lock) + hand/rebate.
++export const makeDoorRegion = (x, y, w, h) => ({
++  ...makeLeafRegion(x, y, w, h),
++  regionType: 'door',
++  paneSpec: null,
++  hardware: [
++    { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: doorHingeCount(h), autoComputed: true, side: 'front' },
++  ],
++})
++
++// A new design tree skeleton. productType "door" seeds a pre-typed door leaf.
++export const makeEmptyTree = (name, width, height, sectionSize = '5', gauge = '18G', productType = 'window') => ({
+   id: crypto.randomUUID(),
+   type: 'design',
+   name,
++  productType,
+   outerWidth: width,
+   outerHeight: height,
+   sectionSize,
+@@ -31,7 +48,9 @@ export const makeEmptyTree = (name, width, height, sectionSize = '5', gauge = '1
+     type: 'frame',
+     width,
+     height,
+-    rootRegion: makeLeafRegion(0, 0, width, height),
++    rootRegion: productType === 'door'
++      ? makeDoorRegion(0, 0, width, height)
++      : makeLeafRegion(0, 0, width, height),
+   },
+ })
+ 
+@@ -325,6 +344,8 @@ function _splitRegionNode(region, targetId, direction, position) {
+       regionType: null,
+       paneSpec: null,
+       hardware: [],
++      doorHand: null,        // shed door labels ΓÇö this is no longer a door leaf
++      rebate: 'single',
+       split: {
+         id: crypto.randomUUID(),
+         type: 'split',
+@@ -384,7 +405,7 @@ function _collapseRegionInTree(tree, regionId) {
+ 
+ function _collapseRegionNode(region, targetId) {
+   if (region.id === targetId) {
+-    return { ...region, isLeaf: true, regionType: 'open', split: null, hardware: [], paneSpec: null, overlays: [] }
++    return { ...region, isLeaf: true, regionType: 'open', split: null, hardware: [], paneSpec: null, overlays: [], doorHand: null, rebate: 'single' }
+   }
+   if (region.split) {
+     return {

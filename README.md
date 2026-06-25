@@ -11,6 +11,21 @@ source of truth for the geometry model, validation rules, and cost formulas.
 
 ---
 
+## Documentation
+
+Full engineering documentation lives in [`docs/`](docs/):
+
+| Document | What it covers |
+|---|---|
+| [Architecture](docs/ARCHITECTURE.md) | **Start here** — the whole system end-to-end: components, data flow, request lifecycles, and how everything actually works |
+| [Domain Model](docs/DOMAIN_MODEL.md) | The business concepts and how the geometry tree encodes them |
+| [Pricing Engine](docs/PRICING_ENGINE.md) | Deep dive into the deterministic cost engine, with worked examples |
+| [Backend Reference](docs/BACKEND.md) | FastAPI structure, database schema, endpoint catalogue, services |
+| [Frontend Reference](docs/FRONTEND.md) | React structure, routing, state, the canvas editor |
+| [Development & Operations](docs/DEVELOPMENT.md) | Setup, Docker, hot-reload, testing, deployment, gotchas |
+
+---
+
 ## Stack
 
 | Layer | Technology |

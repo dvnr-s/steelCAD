@@ -3,8 +3,8 @@
  * When a region is selected: shows type, pane spec, grill, hardware editors.
  * When nothing selected: shows tree-level design info.
  */
-import { useState, useEffect } from 'react'
-import { Scissors, X, Plus, ChevronDown, Layers } from 'lucide-react'
+import { useState } from 'react'
+import { Scissors, X, Plus } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useEditorStore from '../store/editorStore'
 import { fmtFt } from '../lib/format'
@@ -373,7 +373,6 @@ export default function PropertiesPanel() {
   const tree = useEditorStore((s) => s.tree)
   const selectedId = useEditorStore((s) => s.selectedId)
   const updateRegion = useEditorStore((s) => s.updateRegion)
-  const splitRegion = useEditorStore((s) => s.splitRegion)
   const collapseRegion = useEditorStore((s) => s.collapseRegion)
   const deselect = useEditorStore((s) => s.deselect)
 
