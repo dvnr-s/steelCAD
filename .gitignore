@@ -1,11 +1,36 @@
+# Environment files (never commit real secrets)
 .env
+.env.local
+.env.*.local
+
+# Temp / scratch
 .tmp/
+*.diff
+
+# Credentials
 credentials.json
 token.json
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
 
 # Virtual environments
 venv/
 .venv/
 env/
+
+# Node / frontend build
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# IDE
+.vscode/
+.idea/
