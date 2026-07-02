@@ -57,7 +57,7 @@ export default function NewDesignModal({ onClose, onCreate }) {
       }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="card fade-in" style={{ width: 460, padding: 28 }}>
+      <div className="card fade-in modal-card" style={{ '--modal-w': '460px', padding: 28 }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 24 }}>
           <h3>New Design</h3>
           <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>

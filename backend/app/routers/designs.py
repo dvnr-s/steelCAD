@@ -5,7 +5,8 @@ Validates tree structure on create and update.
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +19,7 @@ from app.schemas.design import (
 from app.services.auth import get_current_user, require_role
 from app.services.access import assert_can_write
 from app.services.audit import record_audit
+from app.services.diagram import tree_to_svg
 from app.services.validation import validate_design_tree
 
 router = APIRouter(prefix="/designs", tags=["Designs"])
@@ -111,6 +113,32 @@ async def create_design(
     await db.refresh(design)
 
     return _design_response(design)
+
+
+@router.get("/{design_id}/thumbnail.svg", summary="Design schematic thumbnail", response_class=Response)
+async def design_thumbnail(
+    design_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Design).where(Design.id == design_id, Design.deleted_at.is_(None))
+    )
+    design = result.scalar_one_or_none()
+    if not design:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Design not found")
+
+    # The SVG is a pure function of the tree, which only changes on update —
+    # updated_at makes a valid ETag, so unchanged thumbnails revalidate as 304.
+    etag = f'W/"{design.id}:{design.updated_at.isoformat()}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+    return Response(
+        content=tree_to_svg(design.tree_json or {}),
+        media_type="image/svg+xml",
+        headers={"ETag": etag, "Cache-Control": "private, max-age=3600"},
+    )
 
 
 @router.get("/{design_id}", response_model=DesignResponse, summary="Get a design by ID")

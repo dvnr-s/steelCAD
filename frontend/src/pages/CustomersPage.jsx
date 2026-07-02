@@ -32,7 +32,7 @@ function NewCustomerModal({ onClose, onCreated }) {
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="card fade-in" style={{ width: 480, padding: 28 }}>
+      <div className="card fade-in modal-card" style={{ '--modal-w': '480px', padding: 28 }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 20 }}>
           <h3>New Customer</h3>
           <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>

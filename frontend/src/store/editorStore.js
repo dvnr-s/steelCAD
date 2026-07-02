@@ -162,6 +162,24 @@ export function findRegionNode(region, id) {
 }
 
 /**
+ * All leaf region ids in depth-first (reading) order — the keyboard tab-cycle
+ * order for canvas region selection.
+ */
+export function listLeafIds(tree) {
+  const ids = []
+  const walk = (region) => {
+    if (!region) return
+    if (region.isLeaf || !region.split) {
+      ids.push(region.id)
+      return
+    }
+    region.split.children.forEach(walk)
+  }
+  walk(tree?.frame?.rootRegion)
+  return ids
+}
+
+/**
  * Re-derive x/y/width/height for every region from the frame size and each
  * split's position. This is the single source of truth for geometry — any
  * drag just updates a split position (or the frame size) and calls relayout.

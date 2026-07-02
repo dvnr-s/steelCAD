@@ -69,7 +69,7 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="card fade-in" style={{ width: 520, padding: 24, maxHeight: '86vh', display: 'flex', flexDirection: 'column' }}>
+      <div className="card fade-in modal-card" style={{ '--modal-w': '520px', padding: 24, display: 'flex', flexDirection: 'column' }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
           <h3>Add Frame</h3>
           <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>

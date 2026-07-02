@@ -26,8 +26,8 @@ function ConfirmModal({ message, title = 'Are you sure?', confirmLabel = 'Confir
       onClick={onCancel}
     >
       <div
-        className="card"
-        style={{ width: 400, padding: 24 }}
+        className="card modal-card"
+        style={{ '--modal-w': '400px', padding: 24 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center" style={{ justifyContent: 'space-between', marginBottom: 16 }}>

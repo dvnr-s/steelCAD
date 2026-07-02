@@ -54,8 +54,8 @@ function InviteModal({ currentUserRole, onClose, onCreated }) {
       onClick={onClose}
     >
       <div
-        className="card"
-        style={{ width: 420, padding: 24 }}
+        className="card modal-card"
+        style={{ '--modal-w': '420px', padding: 24 }}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center" style={{ justifyContent: 'space-between', marginBottom: 20 }}>
@@ -144,7 +144,7 @@ function ResetPasswordModal({ user, onClose }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, backdropFilter: 'blur(4px)' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <form className="card" style={{ width: 380, padding: 24 }} onSubmit={submit}>
+      <form className="card modal-card" style={{ '--modal-w': '380px', padding: 24 }} onSubmit={submit}>
         <div className="flex items-center" style={{ justifyContent: 'space-between', marginBottom: 16 }}>
           <h3 style={{ margin: 0 }}>Reset password — {user.name}</h3>
           <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose}><X size={16} /></button>

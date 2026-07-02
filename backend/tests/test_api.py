@@ -223,6 +223,31 @@ class TestDesignsCRUD:
         assert "Shared Design" in names
 
 
+class TestDesignThumbnail:
+    async def test_thumbnail_svg_and_304(self, client, db_session):
+        await create_user(db_session, "thumb@test.com", role="sales")
+        h = auth_headers(await login(client, "thumb@test.com"))
+        design = (await client.post("/designs", headers=h, json=make_design_payload("Thumb Win"))).json()
+
+        r = await client.get(f"/designs/{design['id']}/thumbnail.svg", headers=h)
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("image/svg+xml")
+        assert "cache-control" in r.headers
+        assert r.text.lstrip().startswith("<svg")
+        etag = r.headers["etag"]
+
+        # Revalidation with the same ETag → 304, no body.
+        r304 = await client.get(f"/designs/{design['id']}/thumbnail.svg",
+                                headers={**h, "If-None-Match": etag})
+        assert r304.status_code == 304
+        assert not r304.content
+
+    async def test_thumbnail_404(self, client, db_session):
+        await create_user(db_session, "thumb404@test.com", role="sales")
+        h = auth_headers(await login(client, "thumb404@test.com"))
+        assert (await client.get(f"/designs/{uuid4()}/thumbnail.svg", headers=h)).status_code == 404
+
+
 class TestCustomersCRUD:
     async def test_create_and_list_customers(self, client, db_session):
         await create_user(db_session, "sales_cust@test.com", role="sales")

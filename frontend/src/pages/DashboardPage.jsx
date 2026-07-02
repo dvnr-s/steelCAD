@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { designsApi } from '../api/client'
 import NewDesignModal from '../components/NewDesignModal'
 import TopNav from '../components/TopNav'
+import useThumbnail from '../hooks/useThumbnail'
 import { useConfirm } from '../components/ConfirmModal'
 import useAuthStore from '../store/authStore'
 
@@ -17,6 +18,7 @@ function DesignCard({ design, onDelete, onDuplicate, onOpen }) {
   const { confirm, ConfirmDialog } = useConfirm()
   const role = useAuthStore((s) => s.user?.role)
   const canDelete = role === 'admin' || role === 'owner'
+  const thumbnail = useThumbnail(design.id, design.updated_at)
 
   const handleDelete = async (e) => {
     e.stopPropagation()
@@ -36,14 +38,19 @@ function DesignCard({ design, onDelete, onDuplicate, onOpen }) {
     <>
     {ConfirmDialog}
     <div className="design-card fade-in" onClick={() => onOpen(design.id)} role="button" tabIndex={0}>
-      {/* Preview area — simple dimension icon */}
+      {/* Preview — server-rendered schematic; generic icon until it loads */}
       <div className="design-card-preview">
-        <svg width="80" height="60" viewBox="0 0 80 60" fill="none">
-          <rect x="4" y="4" width="72" height="52" rx="3" stroke="var(--c-brand)" strokeWidth="2" opacity="0.6" />
-          <rect x="12" y="4" width="1" height="52" fill="var(--c-brand)" opacity="0.3" />
-          <rect x="40" y="4" width="1" height="52" fill="var(--c-brand)" opacity="0.3" />
-          <rect x="4" y="28" width="72" height="1" fill="var(--c-brand)" opacity="0.3" />
-        </svg>
+        {thumbnail ? (
+          <img src={thumbnail} alt={`${design.name} schematic`}
+            style={{ maxWidth: '100%', maxHeight: 120, objectFit: 'contain' }} />
+        ) : (
+          <svg width="80" height="60" viewBox="0 0 80 60" fill="none">
+            <rect x="4" y="4" width="72" height="52" rx="3" stroke="var(--c-brand)" strokeWidth="2" opacity="0.6" />
+            <rect x="12" y="4" width="1" height="52" fill="var(--c-brand)" opacity="0.3" />
+            <rect x="40" y="4" width="1" height="52" fill="var(--c-brand)" opacity="0.3" />
+            <rect x="4" y="28" width="72" height="1" fill="var(--c-brand)" opacity="0.3" />
+          </svg>
+        )}
       </div>
 
       {/* Info */}

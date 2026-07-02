@@ -6,7 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Save, Check, Undo2, Redo2, AlertTriangle, CheckCircle2, SeparatorVertical, SeparatorHorizontal, MousePointer2, HelpCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
-import useEditorStore from '../store/editorStore'
+import useEditorStore, { listLeafIds } from '../store/editorStore'
 import { designsApi, estimatesApi, pricePreview } from '../api/client'
 import { validateTree } from '../lib/validators'
 import { useConfirm } from '../components/ConfirmModal'
@@ -236,7 +236,9 @@ export default function EditorPage() {
       .finally(() => setLoading(false))
   }, [id, frameId, estimateId])
 
-  // Keyboard shortcuts — Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo
+  // Keyboard shortcuts — Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo.
+  // Tab / Shift+Tab / arrows cycle canvas region selection (keyboard access —
+  // Konva shapes aren't focusable).
   useEffect(() => {
     const onKeyDown = (e) => {
       // Don't hijack typing in form fields.
@@ -244,6 +246,23 @@ export default function EditorPage() {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if (e.key === 'Escape') { setAddMode(null); setShowHelp(false); return }
       if (e.key === '?') { setShowHelp((v) => !v); return }
+
+      const cycleKeys = ['Tab', 'ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp']
+      if (cycleKeys.includes(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const { tree: t, selectedId: sel, select: doSelect } = useEditorStore.getState()
+        const leaves = t ? listLeafIds(t) : []
+        if (leaves.length > 0) {
+          e.preventDefault()
+          const backwards = (e.key === 'Tab' && e.shiftKey) || e.key === 'ArrowLeft' || e.key === 'ArrowUp'
+          const idx = leaves.indexOf(sel)
+          const next = idx === -1
+            ? (backwards ? leaves.length - 1 : 0)
+            : (idx + (backwards ? -1 : 1) + leaves.length) % leaves.length
+          doSelect(leaves[next])
+        }
+        return
+      }
+
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       const key = e.key.toLowerCase()
@@ -350,7 +369,7 @@ export default function EditorPage() {
       {showHelp && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
           onClick={() => setShowHelp(false)}>
-          <div className="card" style={{ width: 380, padding: 24 }} onClick={(e) => e.stopPropagation()}>
+          <div className="card modal-card" style={{ '--modal-w': '380px', padding: 24 }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0, marginBottom: 14 }}>Keyboard shortcuts</h3>
             {[
               ['Ctrl/⌘ + Z', 'Undo'],
@@ -535,7 +554,11 @@ export default function EditorPage() {
       </div>
 
       {/* Center: canvas */}
-      <div className="editor-canvas" ref={canvasRef} style={{ position: 'relative' }}>
+      <div
+        className="editor-canvas" ref={canvasRef} style={{ position: 'relative' }}
+        tabIndex={0} role="application"
+        aria-label="Design canvas — Tab or arrow keys cycle region selection"
+      >
         {/* Floating tool palette */}
         <div style={{
           position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',

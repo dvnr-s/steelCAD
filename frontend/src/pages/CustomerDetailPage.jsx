@@ -37,7 +37,7 @@ function CustomerEditModal({ customer, onClose, onSaved }) {
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <form className="card" style={{ width: 440, padding: 24, maxHeight: '86vh', overflowY: 'auto' }} onSubmit={submit}>
+      <form className="card modal-card" style={{ '--modal-w': '440px', padding: 24 }} onSubmit={submit}>
         <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
           <h3 style={{ margin: 0 }}>Edit customer</h3>
           <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose}><X size={16} /></button>
