@@ -6,6 +6,9 @@
  *   // in JSX: {ConfirmDialog}
  *   // in handler: if (await confirm('Delete this?')) { ... }
  */
+/* eslint-disable react-refresh/only-export-components --
+ * This module intentionally co-locates the useConfirm hook with its ConfirmModal
+ * component; the hook is the public API. Fast-refresh granularity is not a concern here. */
 import { useState } from 'react'
 import { AlertTriangle, X } from 'lucide-react'
 

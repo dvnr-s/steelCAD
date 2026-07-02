@@ -36,6 +36,8 @@ class Design(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    # Soft-delete: non-null means hidden from all lists/gets but recoverable.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     # Relationships
     creator = relationship("User", lazy="joined")

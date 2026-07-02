@@ -7,9 +7,9 @@ mutates a library design) plus a quantity. Estimate-level discount, GST, and
 advance are applied to the aggregate of all frame line totals.
 """
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, date, timezone
 
-from sqlalchemy import String, Integer, Numeric, Text, DateTime, ForeignKey
+from sqlalchemy import String, Integer, Numeric, Text, DateTime, Date, ForeignKey
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,10 +28,17 @@ class Estimate(Base):
         nullable=False,
         index=True,
     )
-    number: Mapped[int] = mapped_column(Integer, nullable=False)  # human-friendly EST-#### sequence
+    number: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)  # human-friendly EST-#### sequence
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | final
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | sent | accepted | rejected
+
+    # Quote metadata
+    quote_date: Mapped[date] = mapped_column(
+        Date, default=lambda: datetime.now(timezone.utc).date()
+    )
+    valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
+    terms: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Estimate-level commercial terms
     discount_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
@@ -60,6 +67,8 @@ class Estimate(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    # Soft-delete: non-null means hidden from lists/gets but recoverable.
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     customer = relationship("Customer", back_populates="estimates", lazy="joined")
     frames = relationship(

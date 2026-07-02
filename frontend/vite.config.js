@@ -13,6 +13,8 @@ export default defineConfig({
       '/price': 'http://localhost:8000',
       '/rates': 'http://localhost:8000',
       '/users': 'http://localhost:8000',
+      '/settings': 'http://localhost:8000',
+      '/audit': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
     },
   },

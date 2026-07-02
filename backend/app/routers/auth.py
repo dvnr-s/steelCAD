@@ -3,18 +3,17 @@ Auth router — login, refresh tokens, get current user.
 Account creation is invite-only: use POST /users (admin/owner only).
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from slowapi import Limiter
-from slowapi.util import get_remote_address
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-limiter = Limiter(key_func=get_remote_address)
-
+from app.services.ratelimit import limiter
 from app.database import get_db
 from app.models.user import User, ROLE_ADMIN
-from app.schemas.user import UserLogin, UserResponse, TokenResponse, RefreshRequest
+from app.schemas.user import (
+    UserLogin, UserResponse, TokenResponse, RefreshRequest, ChangePasswordRequest,
+)
 from app.services.auth import (
-    verify_password,
+    verify_password, hash_password,
     create_access_token, create_refresh_token,
     decode_token, get_current_user,
 )
@@ -39,7 +38,8 @@ async def login(request: Request, data: UserLogin, db: AsyncSession = Depends(ge
 
 
 @router.post("/refresh", response_model=TokenResponse, summary="Exchange refresh token for new tokens")
-async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("20/minute")
+async def refresh(request: Request, data: RefreshRequest, db: AsyncSession = Depends(get_db)):
     payload = decode_token(data.refresh_token)
     if payload.get("type") != "refresh":
         raise HTTPException(
@@ -60,6 +60,24 @@ async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)):
 @router.get("/me", response_model=UserResponse, summary="Get current authenticated user")
 async def get_me(user: User = Depends(get_current_user)):
     return UserResponse.from_orm_user(user)
+
+
+@router.post("/change-password", summary="Change your own password")
+@limiter.limit("5/minute")
+async def change_password(
+    request: Request,
+    data: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if not verify_password(data.current_password, user.password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+    user.password = hash_password(data.new_password)
+    await db.flush()
+    return {"message": "Password updated"}
 
 
 @router.post(

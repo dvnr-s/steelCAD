@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Plus, UserCheck, Trash2, X } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, X, KeyRound } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { usersApi } from '../api/client'
 import useAuthStore from '../store/authStore'
@@ -122,9 +122,49 @@ function InviteModal({ currentUserRole, onClose, onCreated }) {
   )
 }
 
+function ResetPasswordModal({ user, onClose }) {
+  const [pwd, setPwd] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (pwd.length < 8) { toast.error('Password must be at least 8 characters'); return }
+    setSaving(true)
+    try {
+      await usersApi.resetPassword(user.id, pwd)
+      toast.success(`Password reset for ${user.name}`)
+      onClose()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to reset password')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, backdropFilter: 'blur(4px)' }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <form className="card" style={{ width: 380, padding: 24 }} onSubmit={submit}>
+        <div className="flex items-center" style={{ justifyContent: 'space-between', marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>Reset password — {user.name}</h3>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="form-group" style={{ marginBottom: 16 }}>
+          <label className="form-label">New temporary password (min 8)</label>
+          <input className="input" type="text" value={pwd} onChange={(e) => setPwd(e.target.value)} autoFocus required />
+        </div>
+        <button type="submit" className="btn btn-primary w-full" disabled={saving}>
+          {saving ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <KeyRound size={15} />} Set password
+        </button>
+      </form>
+    </div>
+  )
+}
+
 export default function UsersPage() {
   const navigate = useNavigate()
   const currentUser = useAuthStore((s) => s.user)
+  const [resetTarget, setResetTarget] = useState(null)
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showInvite, setShowInvite] = useState(false)
@@ -260,7 +300,17 @@ export default function UsersPage() {
                       <td style={{ padding: '12px 16px', color: 'var(--c-text-muted)', fontSize: '0.8rem' }}>
                         {new Date(u.created_at).toLocaleDateString()}
                       </td>
-                      <td style={{ padding: '8px 16px', textAlign: 'right' }}>
+                      <td style={{ padding: '8px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        {!isSelf && (isAdmin || u.role === 'sales') && (
+                          <button
+                            className="btn btn-ghost btn-sm btn-icon"
+                            onClick={() => setResetTarget(u)}
+                            title="Reset password"
+                            aria-label={`Reset password for ${u.name}`}
+                          >
+                            <KeyRound size={14} />
+                          </button>
+                        )}
                         {isAdmin && !isSelf && (
                           <button
                             className="btn btn-ghost btn-sm btn-icon"
@@ -291,6 +341,7 @@ export default function UsersPage() {
           onCreated={(user) => setUsers((prev) => [...prev, user])}
         />
       )}
+      {resetTarget && <ResetPasswordModal user={resetTarget} onClose={() => setResetTarget(null)} />}
       {ConfirmDialog}
     </div>
   )

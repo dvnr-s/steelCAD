@@ -10,7 +10,7 @@ import os
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 
 TEST_DB_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -73,6 +73,13 @@ async def client(test_engine, db_session):
     """
     from app.main import app
     from app.database import get_db
+    from app.services.ratelimit import limiter
+
+    # The limiter uses a process-wide in-memory store keyed by client IP. Every
+    # test shares the same IP, so login/refresh limits would trip mid-suite.
+    # Disable it for integration tests (rate-limit behaviour is exercised in
+    # isolation where relevant).
+    limiter.enabled = False
 
     async def override_get_db():
         yield db_session
@@ -100,6 +107,15 @@ async def create_user(db_session, email: str, password: str = "password123",
     db_session.add(user)
     await db_session.flush()
     return user
+
+
+async def seed_rates(db_session):
+    """Insert the spec §9.2 default rate table (pricing needs it)."""
+    from app.models.rate import Rate
+    from app.services.pricing import DEFAULT_RATES
+    for r in DEFAULT_RATES:
+        db_session.add(Rate(**r))
+    await db_session.flush()
 
 
 async def login(client, email: str, password: str = "password123") -> dict:

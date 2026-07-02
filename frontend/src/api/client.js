@@ -61,6 +61,7 @@ export default api
 export const authApi = {
   login: (data) => api.post('/auth/login', data),
   me: () => api.get('/auth/me'),
+  changePassword: (data) => api.post('/auth/change-password', data),
 }
 
 // ─── Users (invite-only management) ──────────────────────────────
@@ -68,6 +69,7 @@ export const usersApi = {
   list: () => api.get('/users'),
   create: (data) => api.post('/users', data),
   updateRole: (id, role) => api.patch(`/users/${id}/role`, { role }),
+  resetPassword: (id, newPassword) => api.patch(`/users/${id}/password`, { new_password: newPassword }),
   delete: (id) => api.delete(`/users/${id}`),
 }
 
@@ -98,9 +100,12 @@ export const estimatesApi = {
   create: (customerId, data) => api.post(`/customers/${customerId}/estimates`, data),
   get: (id) => api.get(`/estimates/${id}`),
   update: (id, data) => api.put(`/estimates/${id}`, data),
+  setStatus: (id, status) => api.patch(`/estimates/${id}/status`, { status }),
+  duplicate: (id) => api.post(`/estimates/${id}/duplicate`),
   delete: (id) => api.delete(`/estimates/${id}`),
   addFrame: (id, data) => api.post(`/estimates/${id}/frames`, data),
   updateFrame: (id, frameId, data) => api.put(`/estimates/${id}/frames/${frameId}`, data),
+  duplicateFrame: (id, frameId) => api.post(`/estimates/${id}/frames/${frameId}/duplicate`),
   deleteFrame: (id, frameId) => api.delete(`/estimates/${id}/frames/${frameId}`),
   downloadPdf: (id) => api.get(`/estimates/${id}/pdf`, { responseType: 'blob' }),
 }
@@ -110,4 +115,15 @@ export const ratesApi = {
   list: () => api.get('/rates'),
   update: (itemCode, data) => api.put(`/rates/${itemCode}`, data),
   seed: () => api.post('/rates/seed'),
+}
+
+// ─── Company settings (PDF branding) ──────────────────────────────
+export const settingsApi = {
+  getCompany: () => api.get('/settings/company'),
+  updateCompany: (data) => api.put('/settings/company', data),
+}
+
+// ─── Audit / activity trail (admin/owner) ─────────────────────────
+export const auditApi = {
+  list: (params) => api.get('/audit', { params }),
 }

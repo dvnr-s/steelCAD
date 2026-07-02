@@ -1,21 +1,26 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Trash2, BarChart3, Clock } from 'lucide-react'
+import { Plus, Trash2, BarChart3, Clock, Copy, Search } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { designsApi } from '../api/client'
 import NewDesignModal from '../components/NewDesignModal'
 import TopNav from '../components/TopNav'
+import { useConfirm } from '../components/ConfirmModal'
+import useAuthStore from '../store/authStore'
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 
-function DesignCard({ design, onDelete, onOpen }) {
+function DesignCard({ design, onDelete, onDuplicate, onOpen }) {
   const [deleting, setDeleting] = useState(false)
+  const { confirm, ConfirmDialog } = useConfirm()
+  const role = useAuthStore((s) => s.user?.role)
+  const canDelete = role === 'admin' || role === 'owner'
 
   const handleDelete = async (e) => {
     e.stopPropagation()
-    if (!confirm(`Delete "${design.name}"? This cannot be undone.`)) return
+    if (!await confirm(`Delete "${design.name}"? This cannot be undone.`, { title: 'Delete Design', confirmLabel: 'Delete' })) return
     setDeleting(true)
     try {
       await designsApi.delete(design.id)
@@ -28,6 +33,8 @@ function DesignCard({ design, onDelete, onOpen }) {
   }
 
   return (
+    <>
+    {ConfirmDialog}
     <div className="design-card fade-in" onClick={() => onOpen(design.id)} role="button" tabIndex={0}>
       {/* Preview area — simple dimension icon */}
       <div className="design-card-preview">
@@ -62,15 +69,25 @@ function DesignCard({ design, onDelete, onOpen }) {
         </div>
         <button
           className="btn btn-ghost btn-sm btn-icon"
-          onClick={handleDelete}
-          disabled={deleting}
-          title="Delete design"
-          style={{ color: 'var(--c-error)' }}
+          onClick={(e) => { e.stopPropagation(); onDuplicate(design) }}
+          title="Duplicate design"
         >
-          {deleting ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Trash2 size={14} />}
+          <Copy size={14} />
         </button>
+        {canDelete && (
+          <button
+            className="btn btn-ghost btn-sm btn-icon"
+            onClick={handleDelete}
+            disabled={deleting}
+            title="Delete design"
+            style={{ color: 'var(--c-error)' }}
+          >
+            {deleting ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Trash2 size={14} />}
+          </button>
+        )}
       </div>
     </div>
+    </>
   )
 }
 
@@ -80,10 +97,11 @@ export default function DashboardPage() {
   const [designs, setDesigns] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNewModal, setShowNewModal] = useState(false)
+  const [query, setQuery] = useState('')
 
-  const loadDesigns = async () => {
+  const loadDesigns = async (q) => {
     try {
-      const { data } = await designsApi.list({ limit: 50 })
+      const { data } = await designsApi.list({ limit: 50, q: q || undefined })
       setDesigns(data)
     } catch {
       toast.error('Failed to load designs')
@@ -92,7 +110,30 @@ export default function DashboardPage() {
     }
   }
 
-  useEffect(() => { loadDesigns() }, [])
+  // Debounced search.
+  useEffect(() => {
+    const t = setTimeout(() => loadDesigns(query.trim()), query ? 300 : 0)
+    return () => clearTimeout(t)
+  }, [query])
+
+  const duplicateDesign = async (design) => {
+    try {
+      const { data: full } = await designsApi.get(design.id)
+      await designsApi.create({
+        name: `${full.name} (copy)`,
+        description: full.description,
+        outerWidth: full.outer_width,
+        outerHeight: full.outer_height,
+        sectionSize: full.section_size,
+        gauge: full.gauge,
+        tree_json: full.tree_json,
+      })
+      toast.success('Design duplicated')
+      loadDesigns(query.trim())
+    } catch {
+      toast.error('Failed to duplicate design')
+    }
+  }
 
   return (
     <div className="dashboard-layout">
@@ -106,9 +147,20 @@ export default function DashboardPage() {
             <h1 style={{ marginBottom: 4 }}>Design Library</h1>
             <p>Reusable window & door designs — {designs.length} total. Add these to customer estimates as frames.</p>
           </div>
-          <button className="btn btn-primary" onClick={() => setShowNewModal(true)}>
-            <Plus size={16} /> New Design
-          </button>
+          <div className="flex items-center gap-2">
+            <div style={{ position: 'relative' }}>
+              <Search size={15} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-text-dim)' }} />
+              <input
+                placeholder="Search designs…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                style={{ paddingLeft: 32, width: 220 }}
+              />
+            </div>
+            <button className="btn btn-primary" onClick={() => setShowNewModal(true)}>
+              <Plus size={16} /> New Design
+            </button>
+          </div>
         </div>
 
         {/* Content */}
@@ -141,6 +193,7 @@ export default function DashboardPage() {
                 key={d.id}
                 design={d}
                 onDelete={(id) => setDesigns((prev) => prev.filter((x) => x.id !== id))}
+                onDuplicate={duplicateDesign}
                 onOpen={(id) => navigate(`/designs/${id}`)}
               />
             ))}

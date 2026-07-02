@@ -92,7 +92,7 @@ def _door_frame_rft(frame: dict) -> float:
     The bottom sits in the concrete (excluded); empty voids that reach an outer
     edge carry no steel. Reduces to 2×H + W for a plain door (no voids).
     """
-    W, H = frame["width"], frame["height"]
+    W = frame["width"]
     left = top = right = 0.0
     for leaf in _iter_leaves(frame["rootRegion"]):
         if leaf.get("regionType") in (None, "open"):
@@ -146,7 +146,6 @@ def _compute_frame_cost(frame: dict, rate: float, product_type: str = "window") 
     plain door this is 2 × height + width; for a door + window composite it is the
     void-aware outer boundary (see `_door_frame_rft`).
     """
-    w, h = frame["width"], frame["height"]
     if product_type == "door":
         rf = _door_frame_rft(frame)
         label = "Door frame (base in concrete)"

@@ -30,10 +30,24 @@
   .ta-c { text-align: center; }
   .mono { font-variant-numeric: tabular-nums; }
 
-  .frame-detail { margin-top: 6px; }
+  .frame-detail { margin-top: 6px; page-break-inside: avoid; }
   .frame-detail .fname { font-weight: 700; font-size: 11px; margin: 14px 0 4px; color: #374151; }
+  /* Lay the diagram + breakdown out as a 2-cell table. WeasyPrint sizes tables
+     reliably; with flexbox a <table> flex-child ignores min-width:0 and takes its
+     max-content width, pushing the Amount column off the page. */
+  .frame-body { width: 100%; table-layout: fixed; }
+  .frame-body td.fb-diagram { width: 184px; padding: 0 14px 0 0; border: none; vertical-align: top; }
+  .frame-body td.fb-items { padding: 0; border: none; vertical-align: top; }
+  .frame-diagram { width: 170px; border: 1px solid #e5e7eb; border-radius: 4px;
+                   padding: 6px; background: #fcfcfd; text-align: center; }
+  .frame-diagram img, .frame-diagram svg { max-width: 158px; max-height: 200px; }
+  .items { table-layout: fixed; }
+  .items col.c-item { width: 27%; }
+  .items col.c-desc { width: 49%; }
+  .items col.c-amt  { width: 24%; }
   .items th { text-align: left; padding: 4px 8px; font-size: 8.5px; color: #9ca3af; text-transform: uppercase; }
-  .items td { padding: 3px 8px; border-bottom: 1px solid #f3f4f6; color: #4b5563; font-size: 10px; }
+  .items td { padding: 3px 8px; border-bottom: 1px solid #f3f4f6; color: #4b5563; font-size: 10px;
+              word-wrap: break-word; overflow-wrap: break-word; }
 
   .totals { margin-top: 18px; margin-left: auto; width: 48%; }
   .totals td { padding: 5px 9px; }
@@ -48,14 +62,25 @@
 </head>
 <body>
   <div class="header">
-    <div>
-      <div class="brand">SteelCAD</div>
-      <div class="brand-sub">Steel Doors &amp; Windows — Estimate</div>
+    <div style="display:flex; align-items:flex-start; gap:12px;">
+      {% if company.logo_data_url %}<img src="{{ company.logo_data_url }}" style="max-height:54px; max-width:160px;" />{% endif %}
+      <div>
+        <div class="brand">{{ company.name }}</div>
+        <div class="brand-sub">Steel Doors &amp; Windows</div>
+        {% if company.address %}<div class="brand-sub">{{ company.address }}</div>{% endif %}
+        <div class="brand-sub">
+          {% if company.phone %}{{ company.phone }}{% endif %}
+          {% if company.email %} · {{ company.email }}{% endif %}
+          {% if company.gstin %} · GSTIN: {{ company.gstin }}{% endif %}
+        </div>
+      </div>
     </div>
     <div class="doc-meta">
-      <div class="title">ESTIMATE</div>
+      <div class="title">QUOTATION</div>
       <div class="num">EST-{{ "%04d"|format(estimate.number) }}</div>
-      <div class="date">{{ created_at }}</div>
+      <div class="date">Date: {{ estimate.quote_date }}</div>
+      {% if estimate.valid_until %}<div class="date">Valid until: {{ estimate.valid_until }}</div>{% endif %}
+      <div class="date">Status: {{ estimate.status|capitalize }}</div>
     </div>
   </div>
 
@@ -71,7 +96,6 @@
     </div>
     <div class="party" style="text-align:right;">
       {% if estimate.title %}<div class="label">Project</div><div class="name">{{ estimate.title }}</div>{% endif %}
-      <div style="margin-top:6px; color:#6b7280;">Status: {{ estimate.status|capitalize }}</div>
     </div>
   </div>
 
@@ -110,7 +134,18 @@
   {% for f in frames %}
   <div class="frame-detail">
     <div class="fname">{{ loop.index }}. {{ f.name }} — unit breakdown ({{ f.dimensions }})</div>
+    <table class="frame-body">
+    <tr>
+    <td class="fb-diagram">
+    <div class="frame-diagram">
+      {{ f.diagram_svg|safe }}
+    </div>
+    </td>
+    <td class="fb-items">
     <table class="items">
+      <colgroup>
+        <col class="c-item" /><col class="c-desc" /><col class="c-amt" />
+      </colgroup>
       <thead>
         <tr><th>Item</th><th>Description</th><th class="ta-r">Amount</th></tr>
       </thead>
@@ -135,8 +170,33 @@
         {% endif %}
       </tbody>
     </table>
+    </td>
+    </tr>
+    </table>
   </div>
   {% endfor %}
+
+  <!-- Bill of materials (consolidated across all frames × quantities) -->
+  {% if bom %}
+  <div class="frame-detail">
+    <div class="fname">Bill of Materials</div>
+    <table class="summary">
+      <thead>
+        <tr><th>Material</th><th class="ta-r">Quantity</th><th>Unit</th><th class="ta-r">Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for b in bom %}
+        <tr>
+          <td>{{ b.label }}</td>
+          <td class="ta-r mono">{{ "%g"|format(b.quantity) }}</td>
+          <td>{{ b.unit }}</td>
+          <td class="ta-r mono">₹{{ b.cost|money }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 
   <!-- Totals -->
   <table class="totals">
@@ -155,8 +215,16 @@
   <div class="notes"><strong>Notes:</strong> {{ estimate.notes }}</div>
   {% endif %}
 
+  {% if estimate.terms %}
+  <div class="notes"><strong>Terms &amp; Conditions:</strong> {{ estimate.terms }}</div>
+  {% endif %}
+
+  {% if company.bank_details %}
+  <div class="notes"><strong>Bank Details:</strong> {{ company.bank_details }}</div>
+  {% endif %}
+
   <div class="footer">
-    Generated by SteelCAD on {{ generated_at }} · This is a computer-generated estimate.
+    Generated by {{ company.name }} on {{ generated_at }} · This is a computer-generated quotation.
   </div>
 </body>
 </html>

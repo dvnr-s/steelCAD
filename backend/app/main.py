@@ -8,22 +8,27 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from app.config import get_settings
+from app.services.ratelimit import limiter
 from app.database import engine, Base
 from app.logging_config import configure_logging, get_logger
 from app.models import User, Design, Customer, Estimate, EstimateFrame, Rate  # noqa: F401
-from app.routers import auth, designs, estimates, rates, customers, users
+from app.models.company import CompanySettings  # noqa: F401
+from app.models.audit import AuditLog  # noqa: F401
+from app.models.rate import RateHistory  # noqa: F401
+from app.routers import (
+    auth, designs, estimates, rates, customers, users,
+    settings as settings_router, audit as audit_router,
+)
 
 configure_logging()
 logger = get_logger("steelcad")
 settings = get_settings()
 
-# ─── Rate limiter (applied per-endpoint via decorator) ─────────────
-limiter = Limiter(key_func=get_remote_address)
+# ─── Rate limiter is the shared instance from app.services.ratelimit ──
 
 
 @asynccontextmanager
@@ -63,6 +68,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ─── Security headers ──────────────────────────────────────────────
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    if settings.is_production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+    return response
 
 
 # ─── Request logging with request-ID ──────────────────────────────
@@ -106,6 +124,8 @@ app.include_router(designs.router)
 app.include_router(customers.router)
 app.include_router(estimates.router)
 app.include_router(rates.router)
+app.include_router(settings_router.router)
+app.include_router(audit_router.router)
 
 
 # ─── Health / readiness ────────────────────────────────────────────

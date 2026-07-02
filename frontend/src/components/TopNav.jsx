@@ -1,9 +1,12 @@
 /**
  * Shared top navigation bar.
  */
+import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { LogOut, Settings, Users, LayoutGrid, UserCog } from 'lucide-react'
+import { LogOut, Settings, Users, LayoutGrid, UserCog, Building2, KeyRound, X, Activity } from 'lucide-react'
+import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
+import { authApi } from '../api/client'
 
 const ROLE_LABELS = { admin: 'Admin', owner: 'Owner', sales: 'Sales' }
 const ROLE_BADGE_STYLE = {
@@ -12,11 +15,56 @@ const ROLE_BADGE_STYLE = {
   sales: { background: 'var(--c-surface-3)', color: 'var(--c-text-muted)' },
 }
 
+function ChangePasswordModal({ onClose }) {
+  const [current, setCurrent] = useState('')
+  const [next, setNext] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (next.length < 8) { toast.error('New password must be at least 8 characters'); return }
+    setSaving(true)
+    try {
+      await authApi.changePassword({ current_password: current, new_password: next })
+      toast.success('Password updated')
+      onClose()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to change password')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <form className="card fade-in" style={{ width: 380, padding: 24 }} onSubmit={submit}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>Change password</h3>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="form-group" style={{ marginBottom: 12 }}>
+          <label>Current password</label>
+          <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)} required autoFocus />
+        </div>
+        <div className="form-group" style={{ marginBottom: 16 }}>
+          <label>New password (min 8)</label>
+          <input type="password" value={next} onChange={(e) => setNext(e.target.value)} required />
+        </div>
+        <button type="submit" className="btn btn-primary w-full" disabled={saving}>
+          {saving ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <KeyRound size={15} />} Update password
+        </button>
+      </form>
+    </div>
+  )
+}
+
 export default function TopNav() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const navigate = useNavigate()
   const { pathname } = useLocation()
+  const [showPwd, setShowPwd] = useState(false)
 
   const isCustomers = pathname === '/' || pathname.startsWith('/customers') || pathname.startsWith('/estimates')
   const isDesigns = pathname.startsWith('/designs')
@@ -63,6 +111,12 @@ export default function TopNav() {
             <button className="btn btn-ghost btn-sm" onClick={() => navigate('/users')}>
               <UserCog size={15} /> Users
             </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/settings')}>
+              <Building2 size={15} /> Company
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/activity')}>
+              <Activity size={15} /> Activity
+            </button>
           </>
         )}
         <div style={{
@@ -83,10 +137,14 @@ export default function TopNav() {
             </span>
           )}
         </div>
+        <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setShowPwd(true)} title="Change password" aria-label="Change password">
+          <KeyRound size={16} />
+        </button>
         <button className="btn btn-ghost btn-sm btn-icon" onClick={handleLogout} title="Logout" aria-label="Logout">
           <LogOut size={16} />
         </button>
       </div>
+      {showPwd && <ChangePasswordModal onClose={() => setShowPwd(false)} />}
     </nav>
   )
 }

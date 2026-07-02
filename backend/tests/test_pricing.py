@@ -5,7 +5,6 @@ Tests the core business logic against the examples in design_rules_spec.md.
 These tests run WITHOUT a database — the pricing engine is pure Python.
 """
 import uuid
-import pytest
 from app.services.pricing import price_design, _round2, _round_rupee, DEFAULT_RATES
 
 

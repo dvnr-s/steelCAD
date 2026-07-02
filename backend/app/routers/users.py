@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.user import User, ROLE_ADMIN, ROLE_OWNER, ROLE_SALES
-from app.schemas.user import UserInvite, UserResponse, UserRoleUpdate
-from app.services.auth import hash_password, get_current_user, require_role
+from app.schemas.user import UserInvite, UserResponse, UserRoleUpdate, AdminPasswordReset
+from app.services.auth import hash_password, require_role
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -102,6 +102,31 @@ async def update_user_role(
     await db.flush()
     await db.refresh(user)
     return UserResponse.from_orm_user(user)
+
+
+@router.patch(
+    "/{user_id}/password",
+    summary="Reset a user's password (admin/owner)",
+)
+async def reset_user_password(
+    user_id: UUID,
+    data: AdminPasswordReset,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    # Owners may only reset sales users' passwords.
+    if current_user.role == ROLE_OWNER and user.role != ROLE_SALES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Owners can only reset passwords for sales users",
+        )
+    user.password = hash_password(data.new_password)
+    await db.flush()
+    return {"message": "Password reset"}
 
 
 @router.delete(

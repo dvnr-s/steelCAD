@@ -1,15 +1,60 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Plus, FileText, Trash2, Clock } from 'lucide-react'
+import { ArrowLeft, Plus, FileText, Trash2, Clock, Pencil, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { customersApi, estimatesApi } from '../api/client'
 import TopNav from '../components/TopNav'
 import { useConfirm } from '../components/ConfirmModal'
+import useAuthStore from '../store/authStore'
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 const money = (n) => `₹${Number(n).toLocaleString('en-IN')}`
+
+function CustomerEditModal({ customer, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: customer.name || '', company: customer.company || '', phone: customer.phone || '',
+    email: customer.email || '', address: customer.address || '', gstin: customer.gstin || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!form.name.trim()) { toast.error('Name is required'); return }
+    setSaving(true)
+    try {
+      const { data } = await customersApi.update(customer.id, form)
+      toast.success('Customer updated')
+      onSaved(data)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to update customer')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <form className="card" style={{ width: 440, padding: 24, maxHeight: '86vh', overflowY: 'auto' }} onSubmit={submit}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>Edit customer</h3>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="form-group" style={{ marginBottom: 10 }}><label>Name *</label><input value={form.name} onChange={set('name')} autoFocus /></div>
+        <div className="flex gap-3"><div className="form-group" style={{ flex: 1 }}><label>Company</label><input value={form.company} onChange={set('company')} /></div>
+          <div className="form-group" style={{ flex: 1 }}><label>Phone</label><input value={form.phone} onChange={set('phone')} /></div></div>
+        <div className="form-group" style={{ marginBottom: 10 }}><label>Email</label><input value={form.email} onChange={set('email')} /></div>
+        <div className="form-group" style={{ marginBottom: 10 }}><label>Address</label><input value={form.address} onChange={set('address')} /></div>
+        <div className="form-group" style={{ marginBottom: 16 }}><label>GSTIN</label><input value={form.gstin} onChange={set('gstin')} /></div>
+        <button type="submit" className="btn btn-primary w-full" disabled={saving}>
+          {saving ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Pencil size={15} />} Save changes
+        </button>
+      </form>
+    </div>
+  )
+}
 
 export default function CustomerDetailPage() {
   const { id } = useParams()
@@ -19,6 +64,9 @@ export default function CustomerDetailPage() {
   const { confirm, ConfirmDialog } = useConfirm()
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const role = useAuthStore((s) => s.user?.role)
+  const canDelete = role === 'admin' || role === 'owner'
 
   const load = async () => {
     try {
@@ -85,6 +133,9 @@ export default function CustomerDetailPage() {
               </div>
               {customer.address && <div style={{ marginTop: 8, fontSize: '0.875rem', color: 'var(--c-text-muted)' }}>{customer.address}</div>}
             </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)} title="Edit customer">
+              <Pencil size={14} /> Edit
+            </button>
           </div>
         </div>
 
@@ -128,9 +179,11 @@ export default function CustomerDetailPage() {
                       <span className="flex items-center gap-1" style={{ justifyContent: 'flex-end' }}><Clock size={11} /> {formatDate(est.updated_at)}</span>
                     </td>
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}>
-                      <button className="btn btn-ghost btn-sm btn-icon" style={{ color: 'var(--c-error)' }} onClick={(e) => handleDelete(e, est)} title="Delete estimate">
-                        <Trash2 size={14} />
-                      </button>
+                      {canDelete && (
+                        <button className="btn btn-ghost btn-sm btn-icon" style={{ color: 'var(--c-error)' }} onClick={(e) => handleDelete(e, est)} title="Delete estimate">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -139,6 +192,13 @@ export default function CustomerDetailPage() {
           </div>
         )}
       </main>
+      {editing && (
+        <CustomerEditModal
+          customer={customer}
+          onClose={() => setEditing(false)}
+          onSaved={(updated) => { setCustomer(updated); setEditing(false) }}
+        />
+      )}
       {ConfirmDialog}
     </div>
   )

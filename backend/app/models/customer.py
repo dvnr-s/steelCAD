@@ -35,6 +35,8 @@ class Customer(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    # Soft-delete: non-null hides the customer (and, via the UI, its estimates).
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     creator = relationship("User", lazy="joined")
     estimates = relationship(

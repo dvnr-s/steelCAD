@@ -4,8 +4,45 @@ API integration tests — auth, RBAC enforcement, core CRUD.
 Requires a running Postgres (see conftest.py). Skipped automatically if
 TEST_DATABASE_URL is unreachable.
 """
-import pytest
-from tests.conftest import create_user, login, auth_headers
+from uuid import uuid4
+
+from tests.conftest import create_user, login, auth_headers, seed_rates
+
+
+def make_design_payload(name: str, width: float = 4.0, height: float = 3.0) -> dict:
+    """Valid DesignCreate body — a single fixed-region window in the canonical
+    DesignTree serialization format (spec §13)."""
+    return {
+        "name": name,
+        "outerWidth": width,
+        "outerHeight": height,
+        "sectionSize": "5",
+        "gauge": "18G",
+        "tree_json": {
+            "id": str(uuid4()),
+            "type": "design",
+            "name": name,
+            "productType": "window",
+            "outerWidth": width,
+            "outerHeight": height,
+            "sectionSize": "5",
+            "gauge": "18G",
+            "frame": {
+                "id": str(uuid4()),
+                "type": "frame",
+                "width": width,
+                "height": height,
+                "rootRegion": {
+                    "id": str(uuid4()),
+                    "type": "region",
+                    "x": 0, "y": 0,
+                    "width": width, "height": height,
+                    "isLeaf": True,
+                    "regionType": "fixed",
+                },
+            },
+        },
+    }
 
 
 # ── Auth ──────────────────────────────────────────────────────────
@@ -48,7 +85,21 @@ class TestAuth:
 
     async def test_unauthenticated_request_rejected(self, client):
         resp = await client.get("/auth/me")
-        assert resp.status_code == 403  # HTTPBearer returns 403 when no credentials
+        assert resp.status_code == 401  # missing bearer credentials → 401 Unauthorized
+
+    async def test_change_password(self, client, db_session):
+        await create_user(db_session, "changepw@test.com", password="oldpassword1")
+        h = auth_headers(await login(client, "changepw@test.com", password="oldpassword1"))
+        # Wrong current password is rejected.
+        bad = await client.post("/auth/change-password", headers=h,
+                                json={"current_password": "nope", "new_password": "newpassword1"})
+        assert bad.status_code == 400
+        # Correct current password updates it; new password then logs in.
+        ok = await client.post("/auth/change-password", headers=h,
+                               json={"current_password": "oldpassword1", "new_password": "newpassword1"})
+        assert ok.status_code == 200
+        relogin = await client.post("/auth/login", json={"email": "changepw@test.com", "password": "newpassword1"})
+        assert relogin.status_code == 200
 
 
 # ── RBAC: Rates ────────────────────────────────────────────────────
@@ -149,27 +200,8 @@ class TestDesignsCRUD:
     async def test_sales_can_create_design(self, client, db_session):
         await create_user(db_session, "sales_design@test.com", role="sales")
         tokens = await login(client, "sales_design@test.com")
-        resp = await client.post("/designs", headers=auth_headers(tokens), json={
-            "name": "Test Window",
-            "outer_width": 4.0,
-            "outer_height": 3.0,
-            "section_size": "5",
-            "gauge": "18G",
-            "tree_json": {
-                "productType": "window",
-                "type": "frame",
-                "width": 4.0,
-                "height": 3.0,
-                "sectionSize": "5",
-                "gauge": "18G",
-                "children": [{
-                    "type": "region",
-                    "regionType": "fixed",
-                    "width": 4.0,
-                    "height": 3.0,
-                }]
-            }
-        })
+        resp = await client.post("/designs", headers=auth_headers(tokens),
+                                 json=make_design_payload("Test Window"))
         assert resp.status_code == 201
         assert resp.json()["name"] == "Test Window"
 
@@ -178,17 +210,8 @@ class TestDesignsCRUD:
         # Create a design as sales user 1
         await create_user(db_session, "design_creator@test.com", role="sales")
         tokens1 = await login(client, "design_creator@test.com")
-        create_resp = await client.post("/designs", headers=auth_headers(tokens1), json={
-            "name": "Shared Design",
-            "outer_width": 3.0, "outer_height": 2.0,
-            "section_size": "5", "gauge": "18G",
-            "tree_json": {
-                "productType": "window", "type": "frame",
-                "width": 3.0, "height": 2.0,
-                "sectionSize": "5", "gauge": "18G",
-                "children": [{"type": "region", "regionType": "fixed", "width": 3.0, "height": 2.0}],
-            }
-        })
+        create_resp = await client.post("/designs", headers=auth_headers(tokens1),
+                                        json=make_design_payload("Shared Design", width=3.0, height=2.0))
         assert create_resp.status_code == 201
 
         # Sales user 2 should see it
@@ -218,13 +241,136 @@ class TestCustomersCRUD:
         ids = [c["id"] for c in list_resp.json()]
         assert customer_id in ids
 
-    async def test_sales_can_delete_customer(self, client, db_session):
+    async def test_sales_cannot_delete_customer(self, client, db_session):
+        """Deletes are gated to admin/owner (cascading customer delete is high blast-radius)."""
         await create_user(db_session, "sales_del_cust@test.com", role="sales")
         tokens = await login(client, "sales_del_cust@test.com")
         create_resp = await client.post("/customers", headers=auth_headers(tokens), json={"name": "To Delete"})
         cid = create_resp.json()["id"]
         del_resp = await client.delete(f"/customers/{cid}", headers=auth_headers(tokens))
+        assert del_resp.status_code == 403
+
+    async def test_owner_can_delete_customer(self, client, db_session):
+        await create_user(db_session, "owner_del_cust@test.com", role="owner")
+        tokens = await login(client, "owner_del_cust@test.com")
+        create_resp = await client.post("/customers", headers=auth_headers(tokens), json={"name": "To Delete"})
+        cid = create_resp.json()["id"]
+        del_resp = await client.delete(f"/customers/{cid}", headers=auth_headers(tokens))
         assert del_resp.status_code == 204
+
+
+# ── Estimate lifecycle (status + finalize lock) ───────────────────
+
+_DESIGN_PAYLOAD = make_design_payload("Lifecycle Window")
+
+
+class TestEstimateLifecycle:
+    async def _setup_estimate_with_frame(self, client, headers, db_session):
+        await seed_rates(db_session)  # pricing needs the rate table
+        cust = (await client.post("/customers", headers=headers, json={"name": "Lifecycle Co"})).json()["id"]
+        design_id = (await client.post("/designs", headers=headers, json=_DESIGN_PAYLOAD)).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=headers, json={"title": "Q"})).json()
+        await client.post(f"/estimates/{est['id']}/frames", headers=headers,
+                          json={"source_design_id": design_id, "quantity": 1})
+        return est["id"], design_id
+
+    async def test_create_sets_quote_dates(self, client, db_session):
+        await create_user(db_session, "est_dates@test.com", role="sales")
+        h = auth_headers(await login(client, "est_dates@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "Dates Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()
+        assert est["quote_date"] is not None
+        assert est["valid_until"] is not None  # defaults to quote_date + 30 days
+
+    async def test_finalize_lock_blocks_edits(self, client, db_session):
+        await create_user(db_session, "est_lock@test.com", role="sales")
+        h = auth_headers(await login(client, "est_lock@test.com"))
+        eid, design_id = await self._setup_estimate_with_frame(client, h, db_session)
+
+        # Move to 'sent'.
+        r = await client.patch(f"/estimates/{eid}/status", headers=h, json={"status": "sent"})
+        assert r.status_code == 200 and r.json()["status"] == "sent"
+
+        # Editing terms and adding frames are now locked.
+        assert (await client.put(f"/estimates/{eid}", headers=h, json={"title": "new"})).status_code == 409
+        assert (await client.post(f"/estimates/{eid}/frames", headers=h,
+                                  json={"source_design_id": design_id, "quantity": 1})).status_code == 409
+
+        # Reopen to draft re-enables editing.
+        assert (await client.patch(f"/estimates/{eid}/status", headers=h, json={"status": "draft"})).status_code == 200
+        assert (await client.put(f"/estimates/{eid}", headers=h, json={"title": "new"})).status_code == 200
+
+    async def test_sales_cannot_delete_estimate(self, client, db_session):
+        await create_user(db_session, "est_del@test.com", role="sales")
+        h = auth_headers(await login(client, "est_del@test.com"))
+        eid, _ = await self._setup_estimate_with_frame(client, h, db_session)
+        # Deletes are gated to admin/owner.
+        assert (await client.delete(f"/estimates/{eid}", headers=h)).status_code == 403
+
+    async def test_duplicate_estimate(self, client, db_session):
+        await create_user(db_session, "est_dup@test.com", role="sales")
+        h = auth_headers(await login(client, "est_dup@test.com"))
+        eid, _ = await self._setup_estimate_with_frame(client, h, db_session)
+        # Lock the source to prove duplicate produces an editable draft regardless.
+        await client.patch(f"/estimates/{eid}/status", headers=h, json={"status": "sent"})
+
+        dup = await client.post(f"/estimates/{eid}/duplicate", headers=h)
+        assert dup.status_code == 201
+        body = dup.json()
+        assert body["status"] == "draft"
+        assert body["id"] != eid
+        assert len(body["frames"]) == 1          # frame copied
+        assert body["grand_total"] > 0           # re-priced
+
+
+# ── Soft-delete + restore ─────────────────────────────────────────
+
+class TestSoftDelete:
+    async def test_customer_delete_hides_then_restore_brings_back(self, client, db_session):
+        await create_user(db_session, "soft_del@test.com", role="owner")
+        h = auth_headers(await login(client, "soft_del@test.com"))
+        cid = (await client.post("/customers", headers=h, json={"name": "Restore Me"})).json()["id"]
+
+        # Delete → gone from the list and 404 on direct get.
+        assert (await client.delete(f"/customers/{cid}", headers=h)).status_code == 204
+        listed = [c["id"] for c in (await client.get("/customers", headers=h)).json()]
+        assert cid not in listed
+        assert (await client.get(f"/customers/{cid}", headers=h)).status_code == 404
+
+        # Restore → back in the list.
+        assert (await client.post(f"/customers/{cid}/restore", headers=h)).status_code == 200
+        listed = [c["id"] for c in (await client.get("/customers", headers=h)).json()]
+        assert cid in listed
+
+    async def test_sales_cannot_restore(self, client, db_session):
+        await create_user(db_session, "soft_owner@test.com", role="owner")
+        ho = auth_headers(await login(client, "soft_owner@test.com"))
+        cid = (await client.post("/customers", headers=ho, json={"name": "X"})).json()["id"]
+        await client.delete(f"/customers/{cid}", headers=ho)
+
+        await create_user(db_session, "soft_sales@test.com", role="sales")
+        hs = auth_headers(await login(client, "soft_sales@test.com"))
+        assert (await client.post(f"/customers/{cid}/restore", headers=hs)).status_code == 403
+
+
+# ── Settings (company profile) RBAC ───────────────────────────────
+
+class TestSettingsRBAC:
+    async def test_sales_can_read_company(self, client, db_session):
+        await create_user(db_session, "settings_read@test.com", role="sales")
+        h = auth_headers(await login(client, "settings_read@test.com"))
+        assert (await client.get("/settings/company", headers=h)).status_code == 200
+
+    async def test_sales_cannot_update_company(self, client, db_session):
+        await create_user(db_session, "settings_write@test.com", role="sales")
+        h = auth_headers(await login(client, "settings_write@test.com"))
+        assert (await client.put("/settings/company", headers=h, json={"name": "X"})).status_code == 403
+
+    async def test_owner_can_update_company(self, client, db_session):
+        await create_user(db_session, "settings_owner@test.com", role="owner")
+        h = auth_headers(await login(client, "settings_owner@test.com"))
+        r = await client.put("/settings/company", headers=h, json={"name": "Acme Steel"})
+        assert r.status_code == 200 and r.json()["name"] == "Acme Steel"
 
 
 # ── Health endpoints ───────────────────────────────────────────────

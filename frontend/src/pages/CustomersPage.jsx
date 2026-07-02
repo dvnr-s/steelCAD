@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Trash2, Users, FileText, X, Phone, Building2 } from 'lucide-react'
+import { Plus, Trash2, Users, FileText, X, Phone, Building2, Search } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { customersApi } from '../api/client'
 import TopNav from '../components/TopNav'
 import { useConfirm } from '../components/ConfirmModal'
+import useAuthStore from '../store/authStore'
 
 function NewCustomerModal({ onClose, onCreated }) {
   const [form, setForm] = useState({ name: '', company: '', phone: '', email: '', address: '', gstin: '' })
@@ -65,11 +66,14 @@ export default function CustomersPage() {
   const [customers, setCustomers] = useState([])
   const [loading, setLoading] = useState(true)
   const [showNew, setShowNew] = useState(false)
+  const [query, setQuery] = useState('')
   const { confirm, ConfirmDialog } = useConfirm()
+  const role = useAuthStore((s) => s.user?.role)
+  const canDelete = role === 'admin' || role === 'owner'
 
-  const load = async () => {
+  const load = async (q) => {
     try {
-      const { data } = await customersApi.list({ limit: 100 })
+      const { data } = await customersApi.list({ limit: 100, q: q || undefined })
       setCustomers(Array.isArray(data) ? data : [])
     } catch {
       toast.error('Failed to load customers')
@@ -77,7 +81,11 @@ export default function CustomersPage() {
       setLoading(false)
     }
   }
-  useEffect(() => { load() }, [])
+  // Debounced search — refetch 300ms after the user stops typing.
+  useEffect(() => {
+    const t = setTimeout(() => load(query.trim()), query ? 300 : 0)
+    return () => clearTimeout(t)
+  }, [query])
 
   const handleDelete = async (e, c) => {
     e.stopPropagation()
@@ -100,11 +108,22 @@ export default function CustomersPage() {
         <div className="flex items-center justify-between" style={{ marginBottom: 28 }}>
           <div>
             <h1 style={{ marginBottom: 4 }}>Customers</h1>
-            <p>{customers.length} customer{customers.length === 1 ? '' : 's'}</p>
+            <p>{customers.length} customer{customers.length === 1 ? '' : 's'}{query ? ' matching' : ''}</p>
           </div>
+          <div className="flex items-center gap-2">
+            <div style={{ position: 'relative' }}>
+              <Search size={15} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-text-dim)' }} />
+              <input
+                placeholder="Search name, company, phone…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                style={{ paddingLeft: 32, width: 240 }}
+              />
+            </div>
           <button className="btn btn-primary" onClick={() => setShowNew(true)}>
             <Plus size={16} /> New Customer
           </button>
+          </div>
         </div>
 
         {loading ? (
@@ -135,9 +154,11 @@ export default function CustomersPage() {
                 </div>
                 <div className="flex items-center justify-between" style={{ marginTop: 10 }}>
                   <span className="badge badge-brand flex items-center gap-1"><FileText size={11} /> {c.estimate_count} estimate{c.estimate_count === 1 ? '' : 's'}</span>
-                  <button className="btn btn-ghost btn-sm btn-icon" style={{ color: 'var(--c-error)' }} onClick={(e) => handleDelete(e, c)} title="Delete customer">
-                    <Trash2 size={14} />
-                  </button>
+                  {canDelete && (
+                    <button className="btn btn-ghost btn-sm btn-icon" style={{ color: 'var(--c-error)' }} onClick={(e) => handleDelete(e, c)} title="Delete customer">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

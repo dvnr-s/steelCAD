@@ -7,11 +7,13 @@ estimate-level discount / GST / advance are applied to the total.
 
 Also exposes a stateless POST /price used by the canvas for live unit pricing.
 """
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,15 +22,20 @@ from app.models.customer import Customer
 from app.models.design import Design
 from app.models.estimate import Estimate, EstimateFrame
 from app.models.rate import Rate
-from app.models.user import User
+from app.models.user import User, ROLE_ADMIN, ROLE_OWNER
 from app.schemas.estimate import (
     PriceRequest, UnitBreakdown, FrameInput, FrameUpdate, FrameDetail,
-    EstimateCreate, EstimateUpdate, EstimateDetail, EstimateSummary, CustomerBrief,
+    EstimateCreate, EstimateUpdate, EstimateStatusUpdate, EstimateDetail,
+    EstimateSummary, CustomerBrief,
 )
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user, require_role
+from app.services.access import assert_can_write, assert_editable
+from app.services.ratelimit import limiter
+from app.services.audit import record_audit
 from app.services.pricing import price_design, _apply_commercial_terms, _round2
 from app.services.validation import validate_design_tree
 from app.services.pdf import generate_estimate_pdf
+from app.routers.settings import get_or_create_company
 
 router = APIRouter(tags=["Estimates"])
 
@@ -84,6 +91,9 @@ def _detail(estimate: Estimate) -> EstimateDetail:
         title=estimate.title,
         notes=estimate.notes,
         status=estimate.status,
+        quote_date=estimate.quote_date,
+        valid_until=estimate.valid_until,
+        terms=estimate.terms,
         customer=CustomerBrief.model_validate(estimate.customer),
         discount_type=estimate.discount_type,
         discount_value=float(estimate.discount_value or 0),
@@ -100,10 +110,35 @@ def _detail(estimate: Estimate) -> EstimateDetail:
     )
 
 
-async def _get_estimate_or_404(estimate_id: UUID, db: AsyncSession) -> Estimate:
+async def _assign_unique_number(estimate: Estimate, db: AsyncSession) -> None:
+    """Allocate the next EST-#### number with a retry loop guarding the UNIQUE
+    constraint against concurrent creates. The estimate must already be db.add()'ed."""
+    for _ in range(5):
+        # no_autoflush: the pending estimate has number=None and would violate
+        # NOT NULL if this SELECT triggered an autoflush.
+        with db.no_autoflush:
+            estimate.number = (
+                await db.execute(select(func.coalesce(func.max(Estimate.number), 0)))
+            ).scalar() + 1
+        try:
+            async with db.begin_nested():
+                await db.flush()
+            return
+        except IntegrityError:
+            continue
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Could not allocate an estimate number — please retry.",
+    )
+
+
+async def _get_estimate_or_404(estimate_id: UUID, db: AsyncSession, *, include_deleted: bool = False) -> Estimate:
+    conditions = [Estimate.id == estimate_id]
+    if not include_deleted:
+        conditions.append(Estimate.deleted_at.is_(None))
     result = await db.execute(
         select(Estimate)
-        .where(Estimate.id == estimate_id)
+        .where(*conditions)
         .options(selectinload(Estimate.frames), joinedload(Estimate.customer))
     )
     estimate = result.scalar_one_or_none()
@@ -126,7 +161,9 @@ def _frame_fields_from_tree(tree: dict) -> dict:
 # ─── Stateless price preview ────────────────────────────────────────
 
 @router.post("/price", response_model=UnitBreakdown, summary="Price a geometry tree (no persistence)")
+@limiter.limit("120/minute")
 async def price_preview(
+    request: Request,
     data: PriceRequest,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -156,13 +193,15 @@ async def create_estimate(
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
-    next_number = (await db.execute(select(func.coalesce(func.max(Estimate.number), 0)))).scalar() + 1
-
+    today = datetime.now(timezone.utc).date()
     estimate = Estimate(
         customer_id=customer_id,
-        number=next_number,
         title=data.title,
         notes=data.notes,
+        terms=data.terms,
+        quote_date=today,
+        # Default a 30-day validity window when the caller doesn't specify one.
+        valid_until=data.valid_until or (today + timedelta(days=30)),
         discount_type=data.discount_type,
         discount_value=data.discount_value,
         advance_pct=data.advance_pct,
@@ -171,9 +210,11 @@ async def create_estimate(
     estimate.customer = customer  # populate relationship to avoid an async lazy-load
     estimate.frames = []          # initialize collection so _recompute doesn't lazy-load
     db.add(estimate)
-    await db.flush()
+    await _assign_unique_number(estimate, db)
     await _recompute(estimate, db)
     await db.flush()
+    await record_audit(db, user, "estimate.create", "estimate", estimate.id,
+                       f"EST-{estimate.number:04d} for {customer.name}")
     return _detail(estimate)
 
 
@@ -188,7 +229,9 @@ async def list_estimates(
     user: User = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Estimate).where(Estimate.customer_id == customer_id).order_by(Estimate.number.desc())
+        select(Estimate)
+        .where(Estimate.customer_id == customer_id, Estimate.deleted_at.is_(None))
+        .order_by(Estimate.number.desc())
     )
     estimates = result.scalars().all()
     return [
@@ -220,6 +263,8 @@ async def update_estimate(
     user: User = Depends(get_current_user),
 ):
     estimate = await _get_estimate_or_404(estimate_id, db)
+    assert_can_write(estimate, user)
+    assert_editable(estimate)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(estimate, field, value)
     await _recompute(estimate, db)
@@ -227,14 +272,91 @@ async def update_estimate(
     return _detail(estimate)
 
 
+@router.patch("/estimates/{estimate_id}/status", response_model=EstimateDetail, summary="Change estimate status")
+async def set_estimate_status(
+    estimate_id: UUID,
+    data: EstimateStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Move an estimate through its lifecycle (draft → sent → accepted/rejected).
+    Always allowed (this is how a locked estimate is reopened to draft)."""
+    estimate = await _get_estimate_or_404(estimate_id, db)
+    assert_can_write(estimate, user)
+    estimate.status = data.status
+    await db.flush()
+    await record_audit(db, user, "estimate.status", "estimate", estimate.id,
+                       f"EST-{estimate.number:04d} → {data.status}")
+    return _detail(estimate)
+
+
 @router.delete("/estimates/{estimate_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Delete an estimate")
 async def delete_estimate(
     estimate_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
     estimate = await _get_estimate_or_404(estimate_id, db)
-    await db.delete(estimate)
+    # Soft-delete: recoverable via POST /estimates/{id}/restore.
+    estimate.deleted_at = datetime.now(timezone.utc)
+    await record_audit(db, user, "estimate.delete", "estimate", estimate.id, f"EST-{estimate.number:04d}")
+
+
+@router.post("/estimates/{estimate_id}/restore", response_model=EstimateDetail, summary="Restore a soft-deleted estimate")
+async def restore_estimate(
+    estimate_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
+):
+    estimate = await _get_estimate_or_404(estimate_id, db, include_deleted=True)
+    estimate.deleted_at = None
+    await db.flush()
+    return _detail(estimate)
+
+
+@router.post(
+    "/estimates/{estimate_id}/duplicate",
+    response_model=EstimateDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Duplicate an estimate (new draft, frames copied)",
+)
+async def duplicate_estimate(
+    estimate_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    source = await _get_estimate_or_404(estimate_id, db)
+    title = (source.title or f"EST-{source.number:04d}")
+    copy = Estimate(
+        customer_id=source.customer_id,
+        title=f"{title} (copy)",
+        notes=source.notes,
+        terms=source.terms,
+        quote_date=datetime.now(timezone.utc).date(),
+        valid_until=source.valid_until,
+        status="draft",
+        discount_type=source.discount_type,
+        discount_value=source.discount_value,
+        advance_pct=source.advance_pct,
+        created_by=user.id,
+    )
+    copy.customer = source.customer
+    copy.frames = [
+        EstimateFrame(
+            source_design_id=f.source_design_id,
+            name=f.name,
+            tree_json=f.tree_json,
+            quantity=f.quantity,
+            sort_order=f.sort_order,
+            **_frame_fields_from_tree(f.tree_json),
+        )
+        for f in source.frames
+    ]
+    db.add(copy)
+    await _assign_unique_number(copy, db)
+    await _recompute(copy, db)
+    await db.flush()
+    return _detail(copy)
 
 
 # ─── Frames within an estimate ──────────────────────────────────────
@@ -247,6 +369,8 @@ async def add_frame(
     user: User = Depends(get_current_user),
 ):
     estimate = await _get_estimate_or_404(estimate_id, db)
+    assert_can_write(estimate, user)
+    assert_editable(estimate)
 
     # Resolve the geometry tree: from the library design, or a provided one-off tree.
     tree = data.tree_json
@@ -298,6 +422,8 @@ async def update_frame(
     user: User = Depends(get_current_user),
 ):
     estimate = await _get_estimate_or_404(estimate_id, db)
+    assert_can_write(estimate, user)
+    assert_editable(estimate)
     frame = next((f for f in estimate.frames if f.id == frame_id), None)
     if not frame:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Frame not found")
@@ -322,6 +448,37 @@ async def update_frame(
     return _detail(estimate)
 
 
+@router.post("/estimates/{estimate_id}/frames/{frame_id}/duplicate", response_model=EstimateDetail, summary="Duplicate a frame")
+async def duplicate_frame(
+    estimate_id: UUID,
+    frame_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    estimate = await _get_estimate_or_404(estimate_id, db)
+    assert_can_write(estimate, user)
+    assert_editable(estimate)
+    src = next((f for f in estimate.frames if f.id == frame_id), None)
+    if not src:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Frame not found")
+
+    next_order = max((f.sort_order for f in estimate.frames), default=-1) + 1
+    db.add(EstimateFrame(
+        estimate_id=estimate.id,
+        source_design_id=src.source_design_id,
+        name=f"{src.name} (copy)",
+        tree_json=src.tree_json,
+        quantity=src.quantity,
+        sort_order=next_order,
+        **_frame_fields_from_tree(src.tree_json),
+    ))
+    await db.flush()
+    await db.refresh(estimate, ["frames"])
+    await _recompute(estimate, db)
+    await db.flush()
+    return _detail(estimate)
+
+
 @router.delete("/estimates/{estimate_id}/frames/{frame_id}", response_model=EstimateDetail, summary="Remove a frame")
 async def delete_frame(
     estimate_id: UUID,
@@ -330,6 +487,8 @@ async def delete_frame(
     user: User = Depends(get_current_user),
 ):
     estimate = await _get_estimate_or_404(estimate_id, db)
+    assert_can_write(estimate, user)
+    assert_editable(estimate)
     frame = next((f for f in estimate.frames if f.id == frame_id), None)
     if not frame:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Frame not found")
@@ -350,7 +509,8 @@ async def download_estimate_pdf(
     user: User = Depends(get_current_user),
 ):
     estimate = await _get_estimate_or_404(estimate_id, db)
-    pdf_bytes = generate_estimate_pdf(estimate)
+    company = await get_or_create_company(db)
+    pdf_bytes = generate_estimate_pdf(estimate, company)
     filename = f"SteelCAD_Estimate_EST-{estimate.number:04d}.pdf"
     return Response(
         content=pdf_bytes,

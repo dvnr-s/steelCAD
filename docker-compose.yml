@@ -32,6 +32,10 @@ services:
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      # Docker Desktop (Windows/macOS) does not forward bind-mount inotify events
+      # to the container, so uvicorn --reload misses host edits. Force polling so
+      # code changes actually trigger a reload.
+      WATCHFILES_FORCE_POLLING: "true"
     depends_on:
       db:
         condition: service_healthy
