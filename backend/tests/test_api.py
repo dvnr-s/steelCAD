@@ -373,6 +373,110 @@ class TestSettingsRBAC:
         assert r.status_code == 200 and r.json()["name"] == "Acme Steel"
 
 
+# ── Estimate listing: pagination, search, frame_count ──────────────
+
+class TestEstimateListing:
+    async def test_pagination_and_search(self, client, db_session):
+        await create_user(db_session, "est_list@test.com", role="sales")
+        h = auth_headers(await login(client, "est_list@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "List Co"})).json()["id"]
+        numbers = []
+        for i in range(5):
+            est = (await client.post(f"/customers/{cust}/estimates", headers=h,
+                                     json={"title": f"Quote {i}"})).json()
+            numbers.append(est["number"])
+
+        base = f"/customers/{cust}/estimates"
+        listed = (await client.get(base, headers=h)).json()
+        assert len(listed) == 5
+        assert [e["number"] for e in listed] == sorted(numbers, reverse=True)
+
+        page = (await client.get(f"{base}?limit=2", headers=h)).json()
+        assert [e["number"] for e in page] == sorted(numbers, reverse=True)[:2]
+
+        page = (await client.get(f"{base}?limit=2&offset=4", headers=h)).json()
+        assert len(page) == 1
+
+        found = (await client.get(f"{base}?q=Quote 3", headers=h)).json()
+        assert [e["title"] for e in found] == ["Quote 3"]
+
+        # A numeric term also matches the estimate number.
+        found = (await client.get(f"{base}?q={numbers[0]}", headers=h)).json()
+        assert numbers[0] in [e["number"] for e in found]
+
+        assert (await client.get(f"{base}?limit=201", headers=h)).status_code == 422
+
+    async def test_list_404_on_missing_customer(self, client, db_session):
+        await create_user(db_session, "est_list404@test.com", role="sales")
+        h = auth_headers(await login(client, "est_list404@test.com"))
+        from uuid import uuid4
+        assert (await client.get(f"/customers/{uuid4()}/estimates", headers=h)).status_code == 404
+
+    async def test_list_404_on_deleted_customer(self, client, db_session):
+        """Estimates of a soft-deleted customer must not leak through the list."""
+        await create_user(db_session, "est_listdel@test.com", role="owner")
+        h = auth_headers(await login(client, "est_listdel@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "Gone Co"})).json()["id"]
+        await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})
+        assert (await client.delete(f"/customers/{cust}", headers=h)).status_code == 204
+        assert (await client.get(f"/customers/{cust}/estimates", headers=h)).status_code == 404
+
+    async def test_frame_count_in_summary(self, client, db_session):
+        await seed_rates(db_session)
+        await create_user(db_session, "est_fc@test.com", role="sales")
+        h = auth_headers(await login(client, "est_fc@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "FC Co"})).json()["id"]
+        design_id = (await client.post("/designs", headers=h, json=make_design_payload("FC Win"))).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()
+        for _ in range(2):
+            r = await client.post(f"/estimates/{est['id']}/frames", headers=h,
+                                  json={"source_design_id": design_id, "quantity": 1})
+            assert r.status_code == 200
+        listed = (await client.get(f"/customers/{cust}/estimates", headers=h)).json()
+        assert listed[0]["frame_count"] == 2
+        assert listed[0]["grand_total"] > 0
+
+
+# ── Tree bounds enforcement on /price ──────────────────────────────
+
+class TestPriceBounds:
+    async def test_price_rejects_oversized_tree(self, client, db_session):
+        await create_user(db_session, "price_bounds@test.com", role="sales")
+        h = auth_headers(await login(client, "price_bounds@test.com"))
+        tree = make_design_payload("Huge", width=40.0, height=3.0)["tree_json"]
+        resp = await client.post("/price", headers=h, json={"tree_json": tree})
+        assert resp.status_code == 422
+        assert any("B-1" in e for e in resp.json()["detail"]["validation_errors"])
+
+
+# ── PDF rate limit ─────────────────────────────────────────────────
+
+class TestPdfRateLimit:
+    async def test_pdf_429_after_limit(self, client, db_session, monkeypatch):
+        """11th PDF download within a minute must be rejected (10/minute).
+        The renderer is mocked — WeasyPrint needs GTK, unavailable on Windows CI."""
+        from app.routers import estimates as estimates_router
+        from app.services.ratelimit import limiter
+
+        monkeypatch.setattr(estimates_router, "generate_estimate_pdf",
+                            lambda estimate, company: b"%PDF-1.4 fake")
+
+        await create_user(db_session, "pdf_rl@test.com", role="sales")
+        h = auth_headers(await login(client, "pdf_rl@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "PDF Co"})).json()["id"]
+        eid = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()["id"]
+
+        limiter.enabled = True  # the client fixture disables it globally
+        try:
+            codes = []
+            for _ in range(11):
+                codes.append((await client.get(f"/estimates/{eid}/pdf", headers=h)).status_code)
+        finally:
+            limiter.enabled = False
+        assert codes[:10] == [200] * 10
+        assert codes[10] == 429
+
+
 # ── Health endpoints ───────────────────────────────────────────────
 
 class TestHealth:

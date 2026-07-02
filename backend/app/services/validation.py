@@ -5,12 +5,71 @@ from design_rules_spec.md §3.3 and §11.
 """
 
 
+# Server-side sanity bounds — protect pricing/PDF/diagram walkers from
+# absurd or hostile trees. Generous vs. real-world steel doors/windows.
+MAX_FRAME_WIDTH_FT = 30
+MAX_FRAME_HEIGHT_FT = 20
+MAX_TREE_DEPTH = 8
+MAX_TREE_NODES = 200
+
+
+def validate_tree_bounds(tree: dict) -> list[str]:
+    """
+    Max-bounds checks (B-1..B-4). Iterative walk — never recurses, so it is safe
+    to run on a tree of untrusted depth BEFORE any recursive validation/pricing.
+    Returns a list of error messages. Empty list = within bounds.
+    """
+    errors: list[str] = []
+    frame = tree.get("frame") if isinstance(tree, dict) else None
+    frame = frame if isinstance(frame, dict) else {}
+
+    width = frame.get("width") or tree.get("outerWidth") or 0
+    height = frame.get("height") or tree.get("outerHeight") or 0
+    if isinstance(width, (int, float)) and width > MAX_FRAME_WIDTH_FT:
+        errors.append(f"B-1: Frame width ({width}ft) exceeds the {MAX_FRAME_WIDTH_FT}ft maximum")
+    if isinstance(height, (int, float)) and height > MAX_FRAME_HEIGHT_FT:
+        errors.append(f"B-2: Frame height ({height}ft) exceeds the {MAX_FRAME_HEIGHT_FT}ft maximum")
+
+    root = frame.get("rootRegion")
+    if not isinstance(root, dict):
+        return errors
+
+    too_deep = False
+    too_many = False
+    count = 0
+    stack: list[tuple[dict, int]] = [(root, 1)]
+    while stack:
+        region, depth = stack.pop()
+        count += 1
+        if count > MAX_TREE_NODES:
+            too_many = True
+            break
+        if depth > MAX_TREE_DEPTH:
+            too_deep = True
+            continue  # don't descend further into an over-deep subtree
+        split = region.get("split")
+        if isinstance(split, dict):
+            for child in split.get("children", []):
+                if isinstance(child, dict):
+                    stack.append((child, depth + 1))
+
+    if too_many:
+        errors.append(f"B-4: Design tree exceeds the {MAX_TREE_NODES}-region maximum")
+    if too_deep:
+        errors.append(f"B-3: Design tree nesting exceeds the depth-{MAX_TREE_DEPTH} maximum")
+    return errors
+
+
 def validate_design_tree(tree: dict) -> list[str]:
     """
     Validate the entire design tree.
     Returns a list of error messages. Empty list = valid.
     """
-    errors: list[str] = []
+    # Bounds first — the walkers below recurse, so refuse oversized/over-deep
+    # trees before touching them.
+    errors: list[str] = validate_tree_bounds(tree)
+    if errors:
+        return errors
 
     # V-1: Frame dimensions >= 1 ft
     frame = tree.get("frame")

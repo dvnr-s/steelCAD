@@ -96,7 +96,7 @@ export const customersApi = {
 
 // ─── Estimates (customer-scoped, multi-frame) ─────────────────────
 export const estimatesApi = {
-  listForCustomer: (customerId) => api.get(`/customers/${customerId}/estimates`),
+  listForCustomer: (customerId, params) => api.get(`/customers/${customerId}/estimates`, { params }),
   create: (customerId, data) => api.post(`/customers/${customerId}/estimates`, data),
   get: (id) => api.get(`/estimates/${id}`),
   update: (id, data) => api.put(`/estimates/${id}`, data),

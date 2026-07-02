@@ -10,11 +10,11 @@ Also exposes a stateless POST /price used by the canvas for live unit pricing.
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import Response
-from sqlalchemy import select, func
+from sqlalchemy import select, func, or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import selectinload, joinedload
+from sqlalchemy.orm import selectinload, joinedload, noload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -33,7 +33,7 @@ from app.services.access import assert_can_write, assert_editable
 from app.services.ratelimit import limiter
 from app.services.audit import record_audit
 from app.services.pricing import price_design, _apply_commercial_terms, _round2
-from app.services.validation import validate_design_tree
+from app.services.validation import validate_design_tree, validate_tree_bounds
 from app.services.pdf import generate_estimate_pdf
 from app.routers.settings import get_or_create_company
 
@@ -132,19 +132,50 @@ async def _assign_unique_number(estimate: Estimate, db: AsyncSession) -> None:
     )
 
 
-async def _get_estimate_or_404(estimate_id: UUID, db: AsyncSession, *, include_deleted: bool = False) -> Estimate:
+async def _get_estimate_or_404(
+    estimate_id: UUID, db: AsyncSession, *,
+    include_deleted: bool = False, for_update: bool = False,
+) -> Estimate:
     conditions = [Estimate.id == estimate_id]
     if not include_deleted:
         conditions.append(Estimate.deleted_at.is_(None))
-    result = await db.execute(
+    stmt = (
         select(Estimate)
         .where(*conditions)
         .options(selectinload(Estimate.frames), joinedload(Estimate.customer))
     )
+    if for_update:
+        # Serializes concurrent frame mutations on one estimate (sort_order
+        # allocation). OF Estimate locks only the estimates row — Postgres
+        # forbids locking the nullable side of the customer outer join.
+        stmt = stmt.with_for_update(of=Estimate)
+    result = await db.execute(stmt)
     estimate = result.scalar_one_or_none()
     if not estimate:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Estimate not found")
     return estimate
+
+
+def _summary_stmt():
+    """Summary-list query: frames are NOT loaded (each frame's JSONB tree is heavy
+    and `lazy=\"selectin\"` would pull all of them); frame_count comes from a
+    correlated COUNT subquery instead."""
+    frame_count = (
+        select(func.count(EstimateFrame.id))
+        .where(EstimateFrame.estimate_id == Estimate.id)
+        .correlate(Estimate)
+        .scalar_subquery()
+    )
+    return select(Estimate, frame_count.label("frame_count")).options(noload(Estimate.frames))
+
+
+def _summary(e: Estimate, frame_count: int) -> EstimateSummary:
+    return EstimateSummary(
+        id=e.id, number=e.number, title=e.title, status=e.status,
+        customer_id=e.customer_id, customer_name=e.customer.name,
+        frame_count=frame_count, grand_total=int(e.grand_total or 0),
+        created_at=e.created_at, updated_at=e.updated_at,
+    )
 
 
 def _frame_fields_from_tree(tree: dict) -> dict:
@@ -168,6 +199,14 @@ async def price_preview(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Bounds only — previews price in-progress trees, so full validation
+    # would reject legitimate intermediate states.
+    bounds_errors = validate_tree_bounds(data.tree_json)
+    if bounds_errors:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"validation_errors": bounds_errors},
+        )
     values, _ = await _load_rates(db)
     try:
         return price_design(data.tree_json, values, discount_type=None, discount_value=0, advance_pct=0)
@@ -225,24 +264,31 @@ async def create_estimate(
 )
 async def list_estimates(
     customer_id: UUID,
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    q: str | None = Query(None, description="Search title; a numeric term also matches the estimate number"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Estimate)
-        .where(Estimate.customer_id == customer_id, Estimate.deleted_at.is_(None))
-        .order_by(Estimate.number.desc())
+    customer = (await db.execute(
+        select(Customer).where(Customer.id == customer_id, Customer.deleted_at.is_(None))
+    )).scalar_one_or_none()
+    if not customer:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
+
+    stmt = _summary_stmt().where(
+        Estimate.customer_id == customer_id, Estimate.deleted_at.is_(None)
     )
-    estimates = result.scalars().all()
-    return [
-        EstimateSummary(
-            id=e.id, number=e.number, title=e.title, status=e.status,
-            customer_id=e.customer_id, customer_name=e.customer.name,
-            frame_count=len(e.frames), grand_total=int(e.grand_total or 0),
-            created_at=e.created_at, updated_at=e.updated_at,
-        )
-        for e in estimates
-    ]
+    if q and q.strip():
+        term = q.strip()
+        conds = [Estimate.title.ilike(f"%{term}%")]
+        if term.isdigit():
+            conds.append(Estimate.number == int(term))
+        stmt = stmt.where(or_(*conds))
+    rows = (await db.execute(
+        stmt.order_by(Estimate.number.desc()).offset(offset).limit(limit)
+    )).all()
+    return [_summary(e, fc) for e, fc in rows]
 
 
 @router.get("/estimates/{estimate_id}", response_model=EstimateDetail, summary="Get an estimate")
@@ -368,7 +414,7 @@ async def add_frame(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    estimate = await _get_estimate_or_404(estimate_id, db)
+    estimate = await _get_estimate_or_404(estimate_id, db, for_update=True)
     assert_can_write(estimate, user)
     assert_editable(estimate)
 
@@ -455,7 +501,7 @@ async def duplicate_frame(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    estimate = await _get_estimate_or_404(estimate_id, db)
+    estimate = await _get_estimate_or_404(estimate_id, db, for_update=True)
     assert_can_write(estimate, user)
     assert_editable(estimate)
     src = next((f for f in estimate.frames if f.id == frame_id), None)
@@ -503,7 +549,9 @@ async def delete_frame(
 # ─── PDF ────────────────────────────────────────────────────────────
 
 @router.get("/estimates/{estimate_id}/pdf", summary="Download estimate as PDF", response_class=Response)
+@limiter.limit("10/minute")  # WeasyPrint rendering is CPU-heavy
 async def download_estimate_pdf(
+    request: Request,
     estimate_id: UUID,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),

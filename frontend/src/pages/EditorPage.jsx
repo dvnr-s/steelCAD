@@ -2,7 +2,7 @@
  * Editor page — the main design workspace.
  * Left: layer tree (future) | Center: Konva canvas | Right: properties panel
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { ArrowLeft, Save, Check, Undo2, Redo2, AlertTriangle, CheckCircle2, SeparatorVertical, SeparatorHorizontal, MousePointer2, HelpCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -185,6 +185,8 @@ export default function EditorPage() {
   const [loading, setLoading] = useState(!!id || frameMode)
   const [saving, setSaving] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  // Pricing fetch failed — the displayed price no longer matches the tree.
+  const [priceStale, setPriceStale] = useState(false)
   const canvasRef = useRef(null)
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 })
   const { confirm, ConfirmDialog } = useConfirm()
@@ -269,21 +271,25 @@ export default function EditorPage() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload)
   }, [isDirty])
 
-  // Refresh live unit price whenever tree changes (debounced)
+  // Refresh live unit price whenever tree changes (debounced).
+  // On failure keep the last known price but flag it stale.
+  const refreshPrice = useCallback(async () => {
+    try {
+      const { data } = await pricePreview(useEditorStore.getState().tree)
+      setLivePrice(data)
+      setPriceStale(false)
+    } catch {
+      setPriceStale(true)
+    }
+  }, [setLivePrice])
+
   const priceTimeout = useRef(null)
   useEffect(() => {
     if (!tree) return
     clearTimeout(priceTimeout.current)
-    priceTimeout.current = setTimeout(async () => {
-      try {
-        const { data } = await pricePreview(tree)
-        setLivePrice(data)
-      } catch {
-        // silently ignore pricing errors during editing
-      }
-    }, 600)
+    priceTimeout.current = setTimeout(refreshPrice, 600)
     return () => clearTimeout(priceTimeout.current)
-  }, [tree])
+  }, [tree, refreshPrice])
 
   const handleSave = async () => {
     if (!tree) return
@@ -380,6 +386,21 @@ export default function EditorPage() {
           )}
         </div>
 
+        {priceStale && (
+          <button
+            onClick={refreshPrice}
+            title="Live pricing failed — the shown price may not match your latest edits. Click to retry."
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '2px 8px', marginRight: 8,
+              fontSize: '0.6875rem', fontWeight: 600,
+              color: '#92400e', background: '#fef3c7',
+              border: '1px solid #fcd34d', borderRadius: 999, cursor: 'pointer',
+            }}
+          >
+            price outdated — retry
+          </button>
+        )}
         <PriceDisplay price={livePrice} />
 
         <div className="flex gap-1" style={{ marginRight: 4 }}>
