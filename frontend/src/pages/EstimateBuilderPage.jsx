@@ -329,6 +329,12 @@ export default function EstimateBuilderPage() {
               textTransform: 'capitalize', color: STATUS_COLORS[est.status],
               border: `1px solid ${STATUS_COLORS[est.status]}`, background: 'transparent',
             }}>{est.status}</span>
+            {est.is_expired && (
+              <span className="badge" title="This sent quote is past its valid-until date — consider revising it"
+                style={{ color: '#f97316', border: '1px solid #f97316', background: 'transparent' }}>
+                expired
+              </span>
+            )}
             {est.status !== 'superseded' && (
               <select value={est.status} onChange={(e) => changeStatus(e.target.value)} title="Change status"
                 style={{ width: 120, fontSize: '0.85rem', padding: '6px 8px' }}>
@@ -364,6 +370,7 @@ export default function EstimateBuilderPage() {
             borderLeft: `3px solid ${STATUS_COLORS[est.status]}`, color: 'var(--c-text-muted)' }}>
             <Lock size={15} />
             <span>This estimate is <strong style={{ textTransform: 'capitalize' }}>{est.status}</strong> and locked.
+              {est.is_expired && <> It expired on <strong>{est.valid_until}</strong> — consider revising it with fresh validity.</>}{' '}
               Use <strong>Revise</strong> to change what was quoted (keeps this version for history), or set status
               back to <strong>Draft</strong> only if it was sent by mistake.</span>
           </div>

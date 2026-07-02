@@ -434,6 +434,45 @@ class TestRevisions:
             await db_session.flush()
 
 
+# ── Auto-expiry (derived, read-time) ───────────────────────────────
+
+class TestExpiry:
+    async def test_expiry_derivation(self, client, db_session):
+        await create_user(db_session, "expiry@test.com", role="sales")
+        h = auth_headers(await login(client, "expiry@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "Expiry Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h,
+                                 json={"title": "Q", "valid_until": "2020-01-01"})).json()
+
+        # Draft with a past valid_until is NOT expired — only live 'sent' quotes are.
+        assert est["is_expired"] is False
+
+        r = (await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "sent"})).json()
+        assert r["is_expired"] is True
+        listed = (await client.get(f"/customers/{cust}/estimates", headers=h)).json()
+        assert listed[0]["is_expired"] is True
+
+        # Accepting an expired quote stays allowed, and acceptance ends expiry.
+        r = await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "accepted"})
+        assert r.status_code == 200
+        assert r.json()["is_expired"] is False
+
+    async def test_expiry_self_corrects_when_validity_extended(self, client, db_session):
+        await create_user(db_session, "expiry2@test.com", role="sales")
+        h = auth_headers(await login(client, "expiry2@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "Extend Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h,
+                                 json={"title": "Q", "valid_until": "2020-01-01"})).json()
+        await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "sent"})
+
+        # Editing terms requires draft; extend validity there, then re-send.
+        await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "draft"})
+        r = (await client.put(f"/estimates/{est['id']}", headers=h, json={"valid_until": "2099-01-01"})).json()
+        assert r["is_expired"] is False
+        r = (await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "sent"})).json()
+        assert r["is_expired"] is False  # no scheduler needed — derived fresh
+
+
 # ── Soft-delete + restore ─────────────────────────────────────────
 
 class TestSoftDelete:

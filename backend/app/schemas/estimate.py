@@ -142,6 +142,8 @@ class EstimateDetail(BaseModel):
     discount_value: float
     advance_pct: float
     gst_pct: float
+    # Derived: sent quote past its valid_until date (never stored).
+    is_expired: bool = False
     frames: list[FrameDetail]
     subtotal: float
     discount_amount: float
@@ -165,6 +167,7 @@ class EstimateSummary(BaseModel):
     customer_name: str
     frame_count: int
     grand_total: int
+    is_expired: bool = False
     created_at: datetime
     updated_at: datetime
 

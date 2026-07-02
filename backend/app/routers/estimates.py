@@ -87,6 +87,17 @@ async def _recompute(estimate: Estimate, db: AsyncSession) -> None:
     estimate.advance_amount = terms["advance_amount"]
 
 
+def _is_expired(estimate: Estimate) -> bool:
+    """Derived at read time — self-correcting when valid_until is edited, no
+    scheduler needed. Only a live 'sent' quote can be expired; accepting an
+    expired quote remains allowed (business calls that judgement)."""
+    return (
+        estimate.status == "sent"
+        and estimate.valid_until is not None
+        and estimate.valid_until < datetime.now(timezone.utc).date()
+    )
+
+
 def _detail(estimate: Estimate) -> EstimateDetail:
     return EstimateDetail(
         id=estimate.id,
@@ -104,6 +115,7 @@ def _detail(estimate: Estimate) -> EstimateDetail:
         discount_value=float(estimate.discount_value or 0),
         advance_pct=float(estimate.advance_pct or 0),
         gst_pct=float(estimate.gst_pct if estimate.gst_pct is not None else 18),
+        is_expired=_is_expired(estimate),
         frames=[FrameDetail.model_validate(f) for f in estimate.frames],
         subtotal=float(estimate.subtotal or 0),
         discount_amount=float(estimate.discount_amount or 0),
@@ -180,6 +192,7 @@ def _summary(e: Estimate, frame_count: int) -> EstimateSummary:
         id=e.id, number=e.number, revision=e.revision or 1, title=e.title, status=e.status,
         customer_id=e.customer_id, customer_name=e.customer.name,
         frame_count=frame_count, grand_total=int(e.grand_total or 0),
+        is_expired=_is_expired(e),
         created_at=e.created_at, updated_at=e.updated_at,
     )
 

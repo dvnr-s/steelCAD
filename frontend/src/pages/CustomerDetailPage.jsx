@@ -176,6 +176,10 @@ export default function CustomerDetailPage() {
                       ) : est.status !== 'draft' && (
                         <span className="badge" style={{ marginLeft: 8, textTransform: 'capitalize' }}>{est.status}</span>
                       )}
+                      {est.is_expired && (
+                        <span className="badge" title="Past its valid-until date — consider revising"
+                          style={{ marginLeft: 8, color: '#f97316', border: '1px solid #f97316', background: 'transparent' }}>expired</span>
+                      )}
                     </td>
                     <td style={{ padding: '12px 16px', color: 'var(--c-text-muted)' }}>{est.title || '—'}</td>
                     <td style={{ padding: '12px 16px', textAlign: 'center' }}>{est.frame_count}</td>
