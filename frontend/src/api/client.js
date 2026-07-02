@@ -98,6 +98,7 @@ export const customersApi = {
 
 // ─── Estimates (customer-scoped, multi-frame) ─────────────────────
 export const estimatesApi = {
+  search: (params) => api.get('/estimates', { params }),
   listForCustomer: (customerId, params) => api.get(`/customers/${customerId}/estimates`, { params }),
   create: (customerId, data) => api.post(`/customers/${customerId}/estimates`, data),
   get: (id) => api.get(`/estimates/${id}`),
@@ -136,4 +137,9 @@ export const auditApi = {
 // ─── Trash (soft-deleted records, admin/owner) ────────────────────
 export const trashApi = {
   list: () => api.get('/trash'),
+}
+
+// ─── Dashboard metrics ────────────────────────────────────────────
+export const dashboardApi = {
+  metrics: () => api.get('/dashboard/metrics'),
 }

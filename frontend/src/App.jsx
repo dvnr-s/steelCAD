@@ -13,6 +13,7 @@ import UsersPage from './pages/UsersPage'
 import SettingsPage from './pages/SettingsPage'
 import ActivityPage from './pages/ActivityPage'
 import TrashPage from './pages/TrashPage'
+import HomePage from './pages/HomePage'
 
 function ProtectedRoute({ children }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -52,7 +53,8 @@ export default function App() {
       />
       <Routes>
         <Route path="/login" element={<LoginPage />} />
-        <Route path="/" element={<ProtectedRoute><CustomersPage /></ProtectedRoute>} />
+        <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>} />
+        <Route path="/customers" element={<ProtectedRoute><CustomersPage /></ProtectedRoute>} />
         <Route path="/customers/:id" element={<ProtectedRoute><CustomerDetailPage /></ProtectedRoute>} />
         <Route path="/estimates/:id" element={<ProtectedRoute><EstimateBuilderPage /></ProtectedRoute>} />
         <Route path="/estimates/:estimateId/frames/:frameId" element={<ProtectedRoute><EditorPage /></ProtectedRoute>} />

@@ -3,7 +3,7 @@
  */
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { LogOut, Settings, Users, LayoutGrid, UserCog, Building2, KeyRound, X, Activity, Trash2 } from 'lucide-react'
+import { LogOut, Settings, Users, LayoutGrid, UserCog, Building2, KeyRound, X, Activity, Trash2, LayoutDashboard } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { authApi } from '../api/client'
@@ -66,7 +66,8 @@ export default function TopNav() {
   const { pathname } = useLocation()
   const [showPwd, setShowPwd] = useState(false)
 
-  const isCustomers = pathname === '/' || pathname.startsWith('/customers') || pathname.startsWith('/estimates')
+  const isHome = pathname === '/'
+  const isCustomers = pathname.startsWith('/customers') || pathname.startsWith('/estimates')
   const isDesigns = pathname.startsWith('/designs')
   const canManage = user?.role === 'admin' || user?.role === 'owner'
 
@@ -93,7 +94,10 @@ export default function TopNav() {
         <span style={{ fontWeight: 800, fontSize: '1.1rem', letterSpacing: '-0.02em' }}>SteelCAD</span>
 
         <div className="flex items-center gap-1" style={{ marginLeft: 12 }}>
-          <button className={`btn btn-sm ${isCustomers ? 'btn-secondary' : 'btn-ghost'}`} onClick={() => navigate('/')}>
+          <button className={`btn btn-sm ${isHome ? 'btn-secondary' : 'btn-ghost'}`} onClick={() => navigate('/')}>
+            <LayoutDashboard size={15} /> Dashboard
+          </button>
+          <button className={`btn btn-sm ${isCustomers ? 'btn-secondary' : 'btn-ghost'}`} onClick={() => navigate('/customers')}>
             <Users size={15} /> Customers
           </button>
           <button className={`btn btn-sm ${isDesigns ? 'btn-secondary' : 'btn-ghost'}`} onClick={() => navigate('/designs')}>

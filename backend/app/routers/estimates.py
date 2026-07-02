@@ -356,6 +356,37 @@ async def list_estimates(
     return [_summary(e, fc) for e, fc in rows]
 
 
+@router.get("/estimates", response_model=list[EstimateSummary], summary="Search estimates across all customers")
+async def search_estimates(
+    q: str | None = Query(None, description="Search title / customer name; a numeric term also matches the number"),
+    status_filter: str | None = Query(None, alias="status"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    stmt = (
+        _summary_stmt()
+        .join(Customer, Customer.id == Estimate.customer_id)
+        .where(Estimate.deleted_at.is_(None), Customer.deleted_at.is_(None))
+    )
+    if status_filter:
+        stmt = stmt.where(Estimate.status == status_filter)
+    if q and q.strip():
+        term = q.strip()
+        conds = [
+            Estimate.title.ilike(f"%{term}%"),
+            Customer.name.ilike(f"%{term}%"),
+        ]
+        if term.isdigit():
+            conds.append(Estimate.number == int(term))
+        stmt = stmt.where(or_(*conds))
+    rows = (await db.execute(
+        stmt.order_by(Estimate.updated_at.desc()).offset(offset).limit(limit)
+    )).all()
+    return [_summary(e, fc) for e, fc in rows]
+
+
 @router.get("/estimates/{estimate_id}", response_model=EstimateDetail, summary="Get an estimate")
 async def get_estimate(
     estimate_id: UUID,

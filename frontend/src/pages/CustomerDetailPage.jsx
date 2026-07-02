@@ -78,7 +78,7 @@ export default function CustomerDetailPage() {
       setEstimates(e)
     } catch {
       toast.error('Customer not found')
-      navigate('/')
+      navigate('/customers')
     } finally {
       setLoading(false)
     }
@@ -88,7 +88,8 @@ export default function CustomerDetailPage() {
   const handleNewEstimate = async () => {
     setCreating(true)
     try {
-      const { data } = await estimatesApi.create(id, { advance_pct: 50 })
+      // No advance_pct — the backend applies the company default.
+      const { data } = await estimatesApi.create(id, {})
       navigate(`/estimates/${data.id}`)
     } catch {
       toast.error('Failed to create estimate')
@@ -116,7 +117,7 @@ export default function CustomerDetailPage() {
     <div className="dashboard-layout">
       <TopNav />
       <main className="dashboard-main fade-in">
-        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/')} style={{ marginBottom: 16 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/customers')} style={{ marginBottom: 16 }}>
           <ArrowLeft size={15} /> All customers
         </button>
 

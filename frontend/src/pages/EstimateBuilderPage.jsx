@@ -178,7 +178,7 @@ export default function EstimateBuilderPage() {
   useEffect(() => {
     estimatesApi.get(id)
       .then(({ data }) => applyEstimate(data))
-      .catch(() => { toast.error('Estimate not found'); navigate('/') })
+      .catch(() => { toast.error('Estimate not found'); navigate('/customers') })
       .finally(() => setLoading(false))
   }, [id])
 

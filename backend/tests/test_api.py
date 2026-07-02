@@ -694,6 +694,88 @@ class TestEstimateListing:
         assert listed[0]["grand_total"] > 0
 
 
+# ── Dashboard metrics + global estimate search ─────────────────────
+
+class TestDashboard:
+    async def _seed(self, client, db_session, h):
+        """Two customers; estimates across statuses incl. one accepted with a
+        frame (real revenue), one superseded, and one on a deleted customer."""
+        await seed_rates(db_session)
+        c1 = (await client.post("/customers", headers=h, json={"name": "Metric Alpha"})).json()["id"]
+        c2 = (await client.post("/customers", headers=h, json={"name": "Metric Beta"})).json()["id"]
+        design = (await client.post("/designs", headers=h, json=make_design_payload("Metric Win"))).json()["id"]
+
+        drafts = [(await client.post(f"/customers/{c1}/estimates", headers=h,
+                                     json={"title": f"Draft {i}"})).json() for i in range(2)]
+
+        accepted = (await client.post(f"/customers/{c1}/estimates", headers=h, json={"title": "Winner"})).json()
+        accepted = (await client.post(f"/estimates/{accepted['id']}/frames", headers=h,
+                                      json={"source_design_id": design, "quantity": 1})).json()
+        await client.patch(f"/estimates/{accepted['id']}/status", headers=h, json={"status": "accepted"})
+
+        # A sent quote that gets revised → source superseded (excluded from pipeline).
+        sent = (await client.post(f"/customers/{c1}/estimates", headers=h, json={"title": "Sent Q"})).json()
+        await client.post(f"/estimates/{sent['id']}/frames", headers=h,
+                          json={"source_design_id": design, "quantity": 1})
+        await client.patch(f"/estimates/{sent['id']}/status", headers=h, json={"status": "sent"})
+        await client.post(f"/estimates/{sent['id']}/revise", headers=h)  # rev 2 draft + superseded source
+
+        # Estimate under a customer that then gets deleted (excluded everywhere).
+        ghost = (await client.post(f"/customers/{c2}/estimates", headers=h, json={"title": "Ghost"})).json()
+        await client.delete(f"/customers/{c2}", headers=h)
+
+        return {"drafts": drafts, "accepted": accepted, "sent": sent, "ghost": ghost, "c1": c1}
+
+    async def test_metrics_math(self, client, db_session):
+        await create_user(db_session, "dash@test.com", role="owner")
+        h = auth_headers(await login(client, "dash@test.com"))
+        seeded = await self._seed(client, db_session, h)
+
+        m = (await client.get("/dashboard/metrics", headers=h)).json()
+        pipeline = {p["status"]: p for p in m["pipeline"]}
+
+        # 2 plain drafts + 1 revision draft; superseded and ghost excluded.
+        assert pipeline["draft"]["count"] == 3
+        assert pipeline["accepted"]["count"] == 1
+        assert pipeline["accepted"]["total"] == seeded["accepted"]["grand_total"]
+        assert "superseded" not in pipeline
+        assert "sent" not in pipeline  # it was revised away
+
+        # Accepted this month shows up in monthly revenue.
+        assert sum(r["total"] for r in m["monthly_revenue"]) == seeded["accepted"]["grand_total"]
+
+        assert m["active_customers"] == 1  # Beta was deleted
+        assert m["active_designs"] == 1
+        recent_ids = [e["id"] for e in m["recent_estimates"]]
+        assert seeded["ghost"]["id"] not in recent_ids
+        assert seeded["sent"]["id"] not in recent_ids  # superseded
+
+    async def test_global_search(self, client, db_session):
+        await create_user(db_session, "gsearch@test.com", role="owner")
+        h = auth_headers(await login(client, "gsearch@test.com"))
+        seeded = await self._seed(client, db_session, h)
+
+        # By title.
+        found = (await client.get("/estimates?q=Winner", headers=h)).json()
+        assert [e["id"] for e in found] == [seeded["accepted"]["id"]]
+
+        # By customer name — everything under Metric Alpha (ghost customer excluded).
+        found = (await client.get("/estimates?q=Metric Alpha", headers=h)).json()
+        assert seeded["ghost"]["id"] not in [e["id"] for e in found]
+        assert len(found) >= 4
+
+        # By number.
+        num = seeded["accepted"]["number"]
+        found = (await client.get(f"/estimates?q={num}", headers=h)).json()
+        assert num in [e["number"] for e in found]
+
+        # Status filter + pagination.
+        drafts = (await client.get("/estimates?status=draft", headers=h)).json()
+        assert {e["status"] for e in drafts} == {"draft"}
+        page = (await client.get("/estimates?status=draft&limit=2&offset=2", headers=h)).json()
+        assert len(page) == len(drafts) - 2
+
+
 # ── Tree bounds enforcement on /price ──────────────────────────────
 
 class TestPriceBounds:
