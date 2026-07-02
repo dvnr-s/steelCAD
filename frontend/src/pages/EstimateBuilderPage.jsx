@@ -286,20 +286,35 @@ export default function EstimateBuilderPage() {
     }
   }
 
+  const saveBlob = (data, type, filename) => {
+    const url = URL.createObjectURL(new Blob([data], { type }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const fileStem = () => `EST-${String(est.number).padStart(4, '0')}${est.revision > 1 ? `_rev${est.revision}` : ''}`
+
   const downloadPdf = async () => {
     setDownloading(true)
     try {
       const { data } = await estimatesApi.downloadPdf(id)
-      const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `SteelCAD_EST-${String(est.number).padStart(4, '0')}${est.revision > 1 ? `_rev${est.revision}` : ''}.pdf`
-      a.click()
-      URL.revokeObjectURL(url)
+      saveBlob(data, 'application/pdf', `SteelCAD_${fileStem()}.pdf`)
     } catch {
       toast.error('PDF download failed')
     } finally {
       setDownloading(false)
+    }
+  }
+
+  const downloadBom = async () => {
+    try {
+      const { data } = await estimatesApi.downloadBomCsv(id)
+      saveBlob(data, 'text/csv', `SteelCAD_BOM_${fileStem()}.csv`)
+    } catch {
+      toast.error('BOM download failed')
     }
   }
 
@@ -351,6 +366,10 @@ export default function EstimateBuilderPage() {
             )}
             <button className="btn btn-secondary" onClick={duplicateEstimate} title="Duplicate this estimate as a new draft with a new number">
               <Copy size={15} /> Duplicate
+            </button>
+            <button className="btn btn-secondary" onClick={downloadBom} disabled={est.frames.length === 0}
+              title="Consolidated bill of materials as a spreadsheet">
+              <Download size={15} /> BOM CSV
             </button>
             <button className="btn btn-primary" onClick={downloadPdf} disabled={downloading || est.frames.length === 0}>
               {downloading ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Download size={15} />} Download PDF

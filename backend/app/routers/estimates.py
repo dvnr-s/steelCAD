@@ -7,6 +7,8 @@ estimate-level discount / GST / advance are applied to the total.
 
 Also exposes a stateless POST /price used by the canvas for live unit pricing.
 """
+import csv
+import io
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
@@ -34,6 +36,7 @@ from app.services.ratelimit import limiter
 from app.services.audit import record_audit
 from app.services.pricing import price_design, _apply_commercial_terms, _round2
 from app.services.validation import validate_design_tree, validate_tree_bounds
+from app.services.bom import build_bom
 from app.services.pdf import generate_estimate_pdf
 from app.routers.settings import get_or_create_company
 
@@ -657,6 +660,35 @@ async def delete_frame(
     await _recompute(estimate, db)
     await db.flush()
     return _detail(estimate)
+
+
+# ─── BOM CSV ────────────────────────────────────────────────────────
+
+@router.get("/estimates/{estimate_id}/bom.csv", summary="Download the bill of materials as CSV", response_class=Response)
+async def download_estimate_bom_csv(
+    estimate_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    estimate = await _get_estimate_or_404(estimate_id, db)
+    bom = build_bom([
+        {"quantity": f.quantity, "breakdown": f.unit_breakdown or {}}
+        for f in estimate.frames
+    ])
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Item", "Quantity", "Unit", "Cost"])
+    for row in bom:
+        writer.writerow([row["label"], row["quantity"], row["unit"], row["cost"]])
+
+    rev_suffix = f"_rev{estimate.revision}" if (estimate.revision or 1) > 1 else ""
+    filename = f"SteelCAD_BOM_EST-{estimate.number:04d}{rev_suffix}.csv"
+    # UTF-8 BOM so Excel decodes ₹ (and any non-ASCII labels) correctly.
+    return Response(
+        content=("\ufeff" + buf.getvalue()).encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # ─── PDF ────────────────────────────────────────────────────────────

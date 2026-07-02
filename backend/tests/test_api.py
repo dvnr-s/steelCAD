@@ -706,6 +706,45 @@ class TestPriceBounds:
         assert any("B-1" in e for e in resp.json()["detail"]["validation_errors"])
 
 
+# ── BOM CSV export ─────────────────────────────────────────────────
+
+class TestBomCsv:
+    async def test_bom_csv_content_and_aggregation(self, client, db_session):
+        await seed_rates(db_session)
+        await create_user(db_session, "bom@test.com", role="sales")
+        h = auth_headers(await login(client, "bom@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "BOM Co"})).json()["id"]
+        design_id = (await client.post("/designs", headers=h, json=make_design_payload("BOM Win"))).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()
+        # Two frames of the same design (qty 2 and 1) — Frame RFT must aggregate ×3.
+        await client.post(f"/estimates/{est['id']}/frames", headers=h,
+                          json={"source_design_id": design_id, "quantity": 2})
+        await client.post(f"/estimates/{est['id']}/frames", headers=h,
+                          json={"source_design_id": design_id, "quantity": 1})
+
+        r = await client.get(f"/estimates/{est['id']}/bom.csv", headers=h)
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("text/csv")
+        assert "attachment" in r.headers["content-disposition"]
+
+        text = r.content.decode("utf-8")
+        assert text.startswith("\ufeff")  # Excel BOM
+        lines = [ln for ln in text.lstrip("\ufeff").splitlines() if ln]
+        assert lines[0] == "Item,Quantity,Unit,Cost"
+
+        # The 4×3 window frame = 14 RFT per unit; 3 units total = 42 RFT.
+        frame_row = next(ln for ln in lines if ln.startswith("Frame,"))
+        assert frame_row.split(",")[1] == "42.0"
+
+    async def test_bom_csv_404_on_deleted(self, client, db_session):
+        await create_user(db_session, "bom404@test.com", role="owner")
+        h = auth_headers(await login(client, "bom404@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "B Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()["id"]
+        await client.delete(f"/estimates/{est}", headers=h)
+        assert (await client.get(f"/estimates/{est}/bom.csv", headers=h)).status_code == 404
+
+
 # ── PDF rate limit ─────────────────────────────────────────────────
 
 class TestPdfRateLimit:

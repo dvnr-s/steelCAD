@@ -112,6 +112,7 @@ export const estimatesApi = {
   duplicateFrame: (id, frameId) => api.post(`/estimates/${id}/frames/${frameId}/duplicate`),
   deleteFrame: (id, frameId) => api.delete(`/estimates/${id}/frames/${frameId}`),
   downloadPdf: (id) => api.get(`/estimates/${id}/pdf`, { responseType: 'blob' }),
+  downloadBomCsv: (id) => api.get(`/estimates/${id}/bom.csv`, { responseType: 'blob' }),
 }
 
 // ─── Rates ────────────────────────────────────────────────────────
