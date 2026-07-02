@@ -170,7 +170,12 @@ export default function CustomerDetailPage() {
                   <tr key={est.id} style={{ borderTop: '1px solid var(--c-border)', cursor: 'pointer' }} onClick={() => navigate(`/estimates/${est.id}`)}>
                     <td style={{ padding: '12px 16px', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
                       EST-{String(est.number).padStart(4, '0')}
-                      {est.status === 'final' && <span className="badge badge-brand" style={{ marginLeft: 8 }}>Final</span>}
+                      {est.revision > 1 && <span className="badge" style={{ marginLeft: 8 }}>rev {est.revision}</span>}
+                      {est.status === 'superseded' ? (
+                        <span className="badge" style={{ marginLeft: 8, color: '#a855f7', border: '1px solid #a855f7', background: 'transparent' }}>superseded</span>
+                      ) : est.status !== 'draft' && (
+                        <span className="badge" style={{ marginLeft: 8, textTransform: 'capitalize' }}>{est.status}</span>
+                      )}
                     </td>
                     <td style={{ padding: '12px 16px', color: 'var(--c-text-muted)' }}>{est.title || '—'}</td>
                     <td style={{ padding: '12px 16px', textAlign: 'center' }}>{est.frame_count}</td>

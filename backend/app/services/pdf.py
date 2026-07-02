@@ -51,6 +51,7 @@ def render_estimate_html(estimate, company=None) -> str:
     return template.render(
         estimate={
             "number": estimate.number,
+            "revision": getattr(estimate, "revision", 1) or 1,
             "title": estimate.title or "",
             "notes": estimate.notes or "",
             "terms": estimate.terms or getattr(company, "default_terms", None) or "",

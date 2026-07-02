@@ -91,6 +91,8 @@ def _detail(estimate: Estimate) -> EstimateDetail:
     return EstimateDetail(
         id=estimate.id,
         number=estimate.number,
+        revision=estimate.revision or 1,
+        parent_id=estimate.parent_id,
         title=estimate.title,
         notes=estimate.notes,
         status=estimate.status,
@@ -175,7 +177,7 @@ def _summary_stmt():
 
 def _summary(e: Estimate, frame_count: int) -> EstimateSummary:
     return EstimateSummary(
-        id=e.id, number=e.number, title=e.title, status=e.status,
+        id=e.id, number=e.number, revision=e.revision or 1, title=e.title, status=e.status,
         customer_id=e.customer_id, customer_name=e.customer.name,
         frame_count=frame_count, grand_total=int(e.grand_total or 0),
         created_at=e.created_at, updated_at=e.updated_at,
@@ -191,6 +193,45 @@ def _frame_fields_from_tree(tree: dict) -> dict:
         "section_size": tree.get("sectionSize", "5"),
         "gauge": tree.get("gauge", "18G"),
     }
+
+
+def _copy_estimate(
+    source: Estimate, user: User, *, gst_pct: float,
+    title: str | None = None, revision: int = 1, parent_id: UUID | None = None,
+    quote_date=None, valid_until=None,
+) -> Estimate:
+    """Deep-copy an estimate (terms + frames) as a fresh draft. Used by
+    duplicate (new number, rev 1) and revise (same number, rev+1)."""
+    copy = Estimate(
+        customer_id=source.customer_id,
+        number=source.number if revision > 1 else None,  # revise keeps the number
+        title=title if title is not None else source.title,
+        notes=source.notes,
+        terms=source.terms,
+        quote_date=quote_date or datetime.now(timezone.utc).date(),
+        valid_until=valid_until or source.valid_until,
+        status="draft",
+        discount_type=source.discount_type,
+        discount_value=source.discount_value,
+        advance_pct=source.advance_pct,
+        gst_pct=gst_pct,
+        revision=revision,
+        parent_id=parent_id,
+        created_by=user.id,
+    )
+    copy.customer = source.customer  # populate relationship to avoid an async lazy-load
+    copy.frames = [
+        EstimateFrame(
+            source_design_id=f.source_design_id,
+            name=f.name,
+            tree_json=f.tree_json,
+            quantity=f.quantity,
+            sort_order=f.sort_order,
+            **_frame_fields_from_tree(f.tree_json),
+        )
+        for f in source.frames
+    ]
+    return copy
 
 
 # ─── Stateless price preview ────────────────────────────────────────
@@ -334,9 +375,20 @@ async def set_estimate_status(
     user: User = Depends(get_current_user),
 ):
     """Move an estimate through its lifecycle (draft → sent → accepted/rejected).
-    Always allowed (this is how a locked estimate is reopened to draft)."""
+    Always allowed (this is how a locked estimate is reopened to draft) — EXCEPT
+    superseded, which is terminal. 'superseded' itself is not settable here (it
+    only happens via /revise; the request schema rejects it)."""
     estimate = await _get_estimate_or_404(estimate_id, db)
     assert_can_write(estimate, user)
+    if estimate.status == "superseded":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Superseded revisions are immutable — work with the latest revision.",
+        )
+    if data.status == "accepted" and estimate.status != "accepted":
+        estimate.accepted_at = datetime.now(timezone.utc)
+    elif data.status != "accepted":
+        estimate.accepted_at = None  # un-accepting removes it from revenue
     estimate.status = data.status
     await db.flush()
     await record_audit(db, user, "estimate.status", "estimate", estimate.id,
@@ -382,37 +434,67 @@ async def duplicate_estimate(
     source = await _get_estimate_or_404(estimate_id, db)
     company = await get_or_create_company(db)
     title = (source.title or f"EST-{source.number:04d}")
-    copy = Estimate(
-        customer_id=source.customer_id,
-        title=f"{title} (copy)",
-        notes=source.notes,
-        terms=source.terms,
-        quote_date=datetime.now(timezone.utc).date(),
-        valid_until=source.valid_until,
-        status="draft",
-        discount_type=source.discount_type,
-        discount_value=source.discount_value,
-        advance_pct=source.advance_pct,
-        # A duplicate is a NEW quote — it snapshots today's GST setting.
-        gst_pct=float(company.gst_pct),
-        created_by=user.id,
-    )
-    copy.customer = source.customer
-    copy.frames = [
-        EstimateFrame(
-            source_design_id=f.source_design_id,
-            name=f.name,
-            tree_json=f.tree_json,
-            quantity=f.quantity,
-            sort_order=f.sort_order,
-            **_frame_fields_from_tree(f.tree_json),
-        )
-        for f in source.frames
-    ]
+    copy = _copy_estimate(source, user, gst_pct=float(company.gst_pct), title=f"{title} (copy)")
     db.add(copy)
     await _assign_unique_number(copy, db)
     await _recompute(copy, db)
     await db.flush()
+    return _detail(copy)
+
+
+@router.post(
+    "/estimates/{estimate_id}/revise",
+    response_model=EstimateDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new revision of a locked estimate (source becomes superseded)",
+)
+async def revise_estimate(
+    estimate_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Copy a sent/accepted/rejected quote as `number` rev `revision+1` (a fresh
+    draft) and mark the source superseded. Unlike reopen-to-draft, this never
+    mutates what the customer was actually sent."""
+    source = await _get_estimate_or_404(estimate_id, db)
+    assert_can_write(source, user)
+    if source.status == "draft":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Draft estimates are edited directly — Revise is for locked (sent/accepted/rejected) quotes.",
+        )
+    if source.status == "superseded":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This revision was already superseded — revise the latest revision instead.",
+        )
+
+    company = await get_or_create_company(db)
+    today = datetime.now(timezone.utc).date()
+    copy = _copy_estimate(
+        source, user,
+        gst_pct=float(company.gst_pct),   # a revision is a new quote — fresh GST snapshot
+        revision=source.revision + 1,
+        parent_id=source.id,
+        quote_date=today,
+        valid_until=today + timedelta(days=30),
+    )
+    db.add(copy)
+    try:
+        # SAVEPOINT guards UNIQUE(number, revision): a concurrent revise of the
+        # same source loses the race without poisoning the transaction.
+        async with db.begin_nested():
+            await db.flush()
+    except IntegrityError:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Someone just created this revision — reload and revise the latest revision.",
+        )
+    source.status = "superseded"
+    await _recompute(copy, db)
+    await db.flush()
+    await record_audit(db, user, "estimate.revise", "estimate", copy.id,
+                       f"EST-{copy.number:04d} rev {copy.revision} (supersedes rev {source.revision})")
     return _detail(copy)
 
 
@@ -570,7 +652,8 @@ async def download_estimate_pdf(
     estimate = await _get_estimate_or_404(estimate_id, db)
     company = await get_or_create_company(db)
     pdf_bytes = generate_estimate_pdf(estimate, company)
-    filename = f"SteelCAD_Estimate_EST-{estimate.number:04d}.pdf"
+    rev_suffix = f"_rev{estimate.revision}" if (estimate.revision or 1) > 1 else ""
+    filename = f"SteelCAD_Estimate_EST-{estimate.number:04d}{rev_suffix}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

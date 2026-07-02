@@ -102,6 +102,7 @@ export const estimatesApi = {
   update: (id, data) => api.put(`/estimates/${id}`, data),
   setStatus: (id, status) => api.patch(`/estimates/${id}/status`, { status }),
   duplicate: (id) => api.post(`/estimates/${id}/duplicate`),
+  revise: (id) => api.post(`/estimates/${id}/revise`),
   delete: (id) => api.delete(`/estimates/${id}`),
   addFrame: (id, data) => api.post(`/estimates/${id}/frames`, data),
   updateFrame: (id, frameId, data) => api.put(`/estimates/${id}/frames/${frameId}`, data),

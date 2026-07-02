@@ -9,7 +9,7 @@ advance are applied to the aggregate of all frame line totals.
 import uuid
 from datetime import datetime, date, timezone
 
-from sqlalchemy import String, Integer, Numeric, Text, DateTime, Date, ForeignKey
+from sqlalchemy import String, Integer, Numeric, Text, DateTime, Date, ForeignKey, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,6 +18,10 @@ from app.database import Base
 
 class Estimate(Base):
     __tablename__ = "estimates"
+    __table_args__ = (
+        # Revisions share the source's number: EST-0007 rev 1, rev 2, ...
+        UniqueConstraint("number", "revision", name="uq_estimates_number_revision"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -28,10 +32,18 @@ class Estimate(Base):
         nullable=False,
         index=True,
     )
-    number: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)  # human-friendly EST-#### sequence
+    number: Mapped[int] = mapped_column(Integer, nullable=False)  # human-friendly EST-#### sequence
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | sent | accepted | rejected
+    status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | sent | accepted | rejected | superseded
+    # Revision chain: a revise copies a locked quote as number/revision+1 and
+    # marks the source 'superseded' (terminal — immutable, kept for history).
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("estimates.id", ondelete="SET NULL"), nullable=True
+    )
+    # Set when the quote moves to accepted (dashboard revenue-by-month).
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Quote metadata
     quote_date: Mapped[date] = mapped_column(

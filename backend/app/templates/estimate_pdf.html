@@ -77,7 +77,7 @@
     </div>
     <div class="doc-meta">
       <div class="title">QUOTATION</div>
-      <div class="num">EST-{{ "%04d"|format(estimate.number) }}</div>
+      <div class="num">EST-{{ "%04d"|format(estimate.number) }}{% if estimate.revision and estimate.revision > 1 %} rev {{ estimate.revision }}{% endif %}</div>
       <div class="date">Date: {{ estimate.quote_date }}</div>
       {% if estimate.valid_until %}<div class="date">Valid until: {{ estimate.valid_until }}</div>{% endif %}
       <div class="date">Status: {{ estimate.status|capitalize }}</div>

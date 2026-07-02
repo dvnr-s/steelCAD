@@ -8,9 +8,11 @@ import TopNav from '../components/TopNav'
 import { useConfirm } from '../components/ConfirmModal'
 
 // Estimate lifecycle: only 'draft' is editable; the rest lock the estimate.
+// 'superseded' is terminal (set only by Revise) and can't be picked manually.
 const STATUS_OPTIONS = ['draft', 'sent', 'accepted', 'rejected']
 const STATUS_COLORS = {
   draft: 'var(--c-text-muted)', sent: '#3b82f6', accepted: '#22c55e', rejected: '#ef4444',
+  superseded: '#a855f7',
 }
 
 const money = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -200,6 +202,20 @@ export default function EstimateBuilderPage() {
     }
   }
 
+  const reviseEstimate = async () => {
+    if (!await confirm(
+      'Create a new revision? This quote becomes superseded (kept for history) and a fresh editable draft with the same number takes its place.',
+      { title: 'Revise Quote', confirmLabel: 'Create Revision' },
+    )) return
+    try {
+      const { data } = await estimatesApi.revise(id)
+      toast.success(`Created EST-${String(data.number).padStart(4, '0')} rev ${data.revision}`)
+      navigate(`/estimates/${data.id}`)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to revise estimate')
+    }
+  }
+
   const duplicateFrame = async (frameId) => {
     try {
       const { data } = await estimatesApi.duplicateFrame(id, frameId)
@@ -277,7 +293,7 @@ export default function EstimateBuilderPage() {
       const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }))
       const a = document.createElement('a')
       a.href = url
-      a.download = `SteelCAD_EST-${String(est.number).padStart(4, '0')}.pdf`
+      a.download = `SteelCAD_EST-${String(est.number).padStart(4, '0')}${est.revision > 1 ? `_rev${est.revision}` : ''}.pdf`
       a.click()
       URL.revokeObjectURL(url)
     } catch {
@@ -302,7 +318,10 @@ export default function EstimateBuilderPage() {
 
         <div className="flex items-center justify-between" style={{ marginBottom: 20 }}>
           <div>
-            <h1 style={{ marginBottom: 4 }}>Estimate EST-{String(est.number).padStart(4, '0')}</h1>
+            <h1 style={{ marginBottom: 4 }}>
+              Estimate EST-{String(est.number).padStart(4, '0')}
+              {est.revision > 1 && <span style={{ color: 'var(--c-text-muted)', fontWeight: 500 }}> rev {est.revision}</span>}
+            </h1>
             <p>For {est.customer.name}{est.customer.company ? ` · ${est.customer.company}` : ''}</p>
           </div>
           <div className="flex items-center gap-2">
@@ -310,13 +329,21 @@ export default function EstimateBuilderPage() {
               textTransform: 'capitalize', color: STATUS_COLORS[est.status],
               border: `1px solid ${STATUS_COLORS[est.status]}`, background: 'transparent',
             }}>{est.status}</span>
-            <select value={est.status} onChange={(e) => changeStatus(e.target.value)} title="Change status"
-              style={{ width: 120, fontSize: '0.85rem', padding: '6px 8px' }}>
-              {STATUS_OPTIONS.map((s) => (
-                <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>
-              ))}
-            </select>
-            <button className="btn btn-secondary" onClick={duplicateEstimate} title="Duplicate this estimate as a new draft">
+            {est.status !== 'superseded' && (
+              <select value={est.status} onChange={(e) => changeStatus(e.target.value)} title="Change status"
+                style={{ width: 120, fontSize: '0.85rem', padding: '6px 8px' }}>
+                {STATUS_OPTIONS.map((s) => (
+                  <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>
+                ))}
+              </select>
+            )}
+            {locked && est.status !== 'superseded' && (
+              <button className="btn btn-secondary" onClick={reviseEstimate}
+                title="Create rev N+1 as a fresh draft; this quote becomes superseded">
+                <Pencil size={15} /> Revise
+              </button>
+            )}
+            <button className="btn btn-secondary" onClick={duplicateEstimate} title="Duplicate this estimate as a new draft with a new number">
               <Copy size={15} /> Duplicate
             </button>
             <button className="btn btn-primary" onClick={downloadPdf} disabled={downloading || est.frames.length === 0}>
@@ -325,12 +352,20 @@ export default function EstimateBuilderPage() {
           </div>
         </div>
 
-        {locked && (
+        {est.status === 'superseded' ? (
+          <div className="card" style={{ padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8,
+            borderLeft: `3px solid ${STATUS_COLORS.superseded}`, color: 'var(--c-text-muted)' }}>
+            <Lock size={15} />
+            <span>This revision was <strong>superseded</strong> by a newer one — it is kept read-only for history.
+              Find the latest revision in the customer's estimate list.</span>
+          </div>
+        ) : locked && (
           <div className="card" style={{ padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8,
             borderLeft: `3px solid ${STATUS_COLORS[est.status]}`, color: 'var(--c-text-muted)' }}>
             <Lock size={15} />
             <span>This estimate is <strong style={{ textTransform: 'capitalize' }}>{est.status}</strong> and locked.
-              Set status back to <strong>Draft</strong> to edit frames or terms.</span>
+              Use <strong>Revise</strong> to change what was quoted (keeps this version for history), or set status
+              back to <strong>Draft</strong> only if it was sent by mistake.</span>
           </div>
         )}
 

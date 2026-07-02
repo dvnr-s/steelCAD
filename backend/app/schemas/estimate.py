@@ -129,6 +129,8 @@ class CustomerBrief(BaseModel):
 class EstimateDetail(BaseModel):
     id: UUID
     number: int
+    revision: int = 1
+    parent_id: Optional[UUID] = None
     title: Optional[str] = None
     notes: Optional[str] = None
     status: str
@@ -156,6 +158,7 @@ class EstimateDetail(BaseModel):
 class EstimateSummary(BaseModel):
     id: UUID
     number: int
+    revision: int = 1
     title: Optional[str] = None
     status: str
     customer_id: UUID

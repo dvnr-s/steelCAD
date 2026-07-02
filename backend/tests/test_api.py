@@ -323,6 +323,117 @@ class TestEstimateLifecycle:
         assert body["grand_total"] > 0           # re-priced
 
 
+# ── Quote revisions ────────────────────────────────────────────────
+
+class TestRevisions:
+    async def _locked_estimate(self, client, h, db_session):
+        """Customer + design + estimate with one frame, moved to 'sent'."""
+        await seed_rates(db_session)
+        cust = (await client.post("/customers", headers=h, json={"name": "Rev Co"})).json()["id"]
+        design_id = (await client.post("/designs", headers=h, json=make_design_payload("Rev Win"))).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Original"})).json()
+        await client.post(f"/estimates/{est['id']}/frames", headers=h,
+                          json={"source_design_id": design_id, "quantity": 2})
+        r = await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "sent"})
+        assert r.status_code == 200
+        return r.json()
+
+    async def test_revise_flow(self, client, db_session):
+        await create_user(db_session, "revise@test.com", role="sales")
+        h = auth_headers(await login(client, "revise@test.com"))
+        source = await self._locked_estimate(client, h, db_session)
+
+        r = await client.post(f"/estimates/{source['id']}/revise", headers=h)
+        assert r.status_code == 201
+        rev = r.json()
+        assert rev["revision"] == 2
+        assert rev["number"] == source["number"]        # same human-facing number
+        assert rev["status"] == "draft"                  # fresh editable draft
+        assert rev["parent_id"] == source["id"]
+        assert len(rev["frames"]) == 1
+        assert rev["grand_total"] == source["grand_total"]  # repriced, same rates
+
+        # Source is now superseded and terminally locked.
+        src = (await client.get(f"/estimates/{source['id']}", headers=h)).json()
+        assert src["status"] == "superseded"
+        assert (await client.patch(f"/estimates/{source['id']}/status", headers=h,
+                                   json={"status": "draft"})).status_code == 409
+        assert (await client.put(f"/estimates/{source['id']}", headers=h,
+                                 json={"title": "x"})).status_code == 409
+
+        # Audit trail recorded the revise.
+        from sqlalchemy import select
+        from app.models.audit import AuditLog
+        rows = (await db_session.execute(
+            select(AuditLog).where(AuditLog.action == "estimate.revise")
+        )).scalars().all()
+        assert any(row.entity_id == rev["id"] for row in rows)
+
+    async def test_revise_draft_409(self, client, db_session):
+        await create_user(db_session, "revise_draft@test.com", role="sales")
+        h = auth_headers(await login(client, "revise_draft@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "Draft Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()
+        assert (await client.post(f"/estimates/{est['id']}/revise", headers=h)).status_code == 409
+
+    async def test_revise_superseded_409(self, client, db_session):
+        await create_user(db_session, "revise_sup@test.com", role="sales")
+        h = auth_headers(await login(client, "revise_sup@test.com"))
+        source = await self._locked_estimate(client, h, db_session)
+        assert (await client.post(f"/estimates/{source['id']}/revise", headers=h)).status_code == 201
+        # Source is superseded now — revising it again must 409.
+        assert (await client.post(f"/estimates/{source['id']}/revise", headers=h)).status_code == 409
+
+    async def test_status_cannot_be_set_to_superseded(self, client, db_session):
+        await create_user(db_session, "sup_manual@test.com", role="sales")
+        h = auth_headers(await login(client, "sup_manual@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "Manual Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()
+        r = await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "superseded"})
+        assert r.status_code == 422  # rejected by the request schema
+
+    async def test_accepted_at_set_and_cleared(self, client, db_session):
+        await create_user(db_session, "accepted_at@test.com", role="sales")
+        h = auth_headers(await login(client, "accepted_at@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "Accept Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()
+
+        from uuid import UUID
+        from sqlalchemy import select
+        from app.models.estimate import Estimate as EstimateModel
+        await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "accepted"})
+        row = (await db_session.execute(
+            select(EstimateModel).where(EstimateModel.id == UUID(est["id"])))).scalar_one()
+        assert row.accepted_at is not None
+
+        await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "draft"})
+        await db_session.refresh(row)
+        assert row.accepted_at is None  # un-accepting removes it from revenue
+
+    async def test_unique_number_revision_constraint(self, db_session):
+        """The composite unique is what the revise race relies on."""
+        import pytest
+        from sqlalchemy.exc import IntegrityError
+        from app.models.estimate import Estimate as EstimateModel
+        from app.models.customer import Customer as CustomerModel
+        from tests.conftest import create_user as mk_user
+        user = await mk_user(db_session, "uq_rev@test.com")
+        cust = CustomerModel(name="UQ Co", created_by=user.id)
+        db_session.add(cust)
+        await db_session.flush()
+
+        def _estimate(rev):
+            return EstimateModel(customer_id=cust.id, number=9001, revision=rev, created_by=user.id)
+
+        db_session.add(_estimate(1))
+        await db_session.flush()
+        db_session.add(_estimate(2))
+        await db_session.flush()  # same number, different revision — OK
+        with pytest.raises(IntegrityError):
+            db_session.add(_estimate(2))
+            await db_session.flush()
+
+
 # ── Soft-delete + restore ─────────────────────────────────────────
 
 class TestSoftDelete:
