@@ -503,6 +503,66 @@ class TestSoftDelete:
         assert (await client.post(f"/customers/{cid}/restore", headers=hs)).status_code == 403
 
 
+# ── Trash view ─────────────────────────────────────────────────────
+
+class TestTrash:
+    async def test_trash_lists_deleted_and_restores(self, client, db_session):
+        await create_user(db_session, "trash_owner@test.com", role="owner")
+        h = auth_headers(await login(client, "trash_owner@test.com"))
+
+        # Delete one of each entity.
+        cust = (await client.post("/customers", headers=h, json={"name": "Trash Cust"})).json()["id"]
+        design = (await client.post("/designs", headers=h, json=make_design_payload("Trash Design"))).json()["id"]
+        cust2 = (await client.post("/customers", headers=h, json={"name": "Keeper"})).json()["id"]
+        est = (await client.post(f"/customers/{cust2}/estimates", headers=h, json={"title": "Trash Est"})).json()["id"]
+        await client.delete(f"/customers/{cust}", headers=h)
+        await client.delete(f"/designs/{design}", headers=h)
+        await client.delete(f"/estimates/{est}", headers=h)
+
+        trash = (await client.get("/trash", headers=h)).json()
+        assert cust in [c["id"] for c in trash["customers"]]
+        assert design in [d["id"] for d in trash["designs"]]
+        est_row = next(e for e in trash["estimates"] if e["id"] == est)
+        assert est_row["customer_deleted"] is False
+
+        # Restore each; audit rows recorded.
+        assert (await client.post(f"/customers/{cust}/restore", headers=h)).status_code == 200
+        assert (await client.post(f"/designs/{design}/restore", headers=h)).status_code == 200
+        assert (await client.post(f"/estimates/{est}/restore", headers=h)).status_code == 200
+        trash = (await client.get("/trash", headers=h)).json()
+        assert not trash["customers"] and not trash["designs"] and not trash["estimates"]
+
+        from sqlalchemy import select
+        from app.models.audit import AuditLog
+        actions = {a.action for a in (await db_session.execute(select(AuditLog))).scalars().all()}
+        assert {"customer.restore", "design.restore", "estimate.restore"} <= actions
+
+    async def test_trash_403_for_sales(self, client, db_session):
+        await create_user(db_session, "trash_sales@test.com", role="sales")
+        h = auth_headers(await login(client, "trash_sales@test.com"))
+        assert (await client.get("/trash", headers=h)).status_code == 403
+
+    async def test_restore_estimate_of_deleted_customer_409(self, client, db_session):
+        await create_user(db_session, "trash_order@test.com", role="owner")
+        h = auth_headers(await login(client, "trash_order@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "Order Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()["id"]
+        await client.delete(f"/estimates/{est}", headers=h)
+        await client.delete(f"/customers/{cust}", headers=h)
+
+        trash = (await client.get("/trash", headers=h)).json()
+        est_row = next(e for e in trash["estimates"] if e["id"] == est)
+        assert est_row["customer_deleted"] is True
+
+        r = await client.post(f"/estimates/{est}/restore", headers=h)
+        assert r.status_code == 409
+        assert "customer" in r.json()["detail"].lower()
+
+        # Restore the customer first, then the estimate goes through.
+        assert (await client.post(f"/customers/{cust}/restore", headers=h)).status_code == 200
+        assert (await client.post(f"/estimates/{est}/restore", headers=h)).status_code == 200
+
+
 # ── Settings (company profile) RBAC ───────────────────────────────
 
 class TestSettingsRBAC:

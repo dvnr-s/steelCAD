@@ -12,6 +12,7 @@ import RatesPage from './pages/RatesPage'
 import UsersPage from './pages/UsersPage'
 import SettingsPage from './pages/SettingsPage'
 import ActivityPage from './pages/ActivityPage'
+import TrashPage from './pages/TrashPage'
 
 function ProtectedRoute({ children }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated)
@@ -61,6 +62,7 @@ export default function App() {
         <Route path="/users" element={<RoleRoute roles={['admin', 'owner']}><UsersPage /></RoleRoute>} />
         <Route path="/settings" element={<RoleRoute roles={['admin', 'owner']}><SettingsPage /></RoleRoute>} />
         <Route path="/activity" element={<RoleRoute roles={['admin', 'owner']}><ActivityPage /></RoleRoute>} />
+        <Route path="/trash" element={<RoleRoute roles={['admin', 'owner']}><TrashPage /></RoleRoute>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

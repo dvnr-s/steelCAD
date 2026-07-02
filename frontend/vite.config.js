@@ -15,6 +15,7 @@ export default defineConfig({
       '/users': 'http://localhost:8000',
       '/settings': 'http://localhost:8000',
       '/audit': 'http://localhost:8000',
+      '/trash': 'http://localhost:8000',
       '/health': 'http://localhost:8000',
     },
   },

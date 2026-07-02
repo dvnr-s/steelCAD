@@ -3,7 +3,7 @@
  */
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { LogOut, Settings, Users, LayoutGrid, UserCog, Building2, KeyRound, X, Activity } from 'lucide-react'
+import { LogOut, Settings, Users, LayoutGrid, UserCog, Building2, KeyRound, X, Activity, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { authApi } from '../api/client'
@@ -116,6 +116,9 @@ export default function TopNav() {
             </button>
             <button className="btn btn-ghost btn-sm" onClick={() => navigate('/activity')}>
               <Activity size={15} /> Activity
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => navigate('/trash')}>
+              <Trash2 size={15} /> Trash
             </button>
           </>
         )}

@@ -204,5 +204,6 @@ async def restore_design(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deleted design not found")
     design.deleted_at = None
     await db.flush()
+    await record_audit(db, user, "design.restore", "design", design.id, design.name)
     await db.refresh(design)
     return _design_response(design)

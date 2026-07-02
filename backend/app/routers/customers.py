@@ -143,5 +143,6 @@ async def restore_customer(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deleted customer not found")
     customer.deleted_at = None
     await db.flush()
+    await record_audit(db, user, "customer.restore", "customer", customer.id, customer.name)
     await db.refresh(customer)
     return customer

@@ -21,7 +21,7 @@ from app.models.audit import AuditLog  # noqa: F401
 from app.models.rate import RateHistory  # noqa: F401
 from app.routers import (
     auth, designs, estimates, rates, customers, users,
-    settings as settings_router, audit as audit_router,
+    settings as settings_router, audit as audit_router, trash as trash_router,
 )
 
 configure_logging()
@@ -126,6 +126,7 @@ app.include_router(estimates.router)
 app.include_router(rates.router)
 app.include_router(settings_router.router)
 app.include_router(audit_router.router)
+app.include_router(trash_router.router)
 
 
 # ─── Health / readiness ────────────────────────────────────────────

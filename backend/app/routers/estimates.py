@@ -428,8 +428,15 @@ async def restore_estimate(
     user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
     estimate = await _get_estimate_or_404(estimate_id, db, include_deleted=True)
+    if estimate.customer.deleted_at is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Restore the customer first — this estimate belongs to a deleted customer.",
+        )
     estimate.deleted_at = None
     await db.flush()
+    await record_audit(db, user, "estimate.restore", "estimate", estimate.id,
+                       f"EST-{estimate.number:04d}")
     return _detail(estimate)
 
 
