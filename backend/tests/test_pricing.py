@@ -451,6 +451,37 @@ def test_advance_percentage():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Test: Configurable GST percentage
+# ═══════════════════════════════════════════════════════════════════
+
+def test_gst_pct_12():
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+
+    result = price_design(tree, RATES, gst_pct=12)
+
+    assert result["subtotal"] == 2160.0
+    assert result["gst"] == 259.2                # 2160 × 0.12
+    assert result["grand_total"] == 2419         # round(2160 + 259.2)
+
+
+def test_gst_pct_defaults_to_18():
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+
+    assert price_design(tree, RATES)["gst"] == price_design(tree, RATES, gst_pct=18)["gst"]
+
+
+def test_gst_pct_zero():
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+
+    result = price_design(tree, RATES, gst_pct=0)
+    assert result["gst"] == 0.0
+    assert result["grand_total"] == 2160
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Test: Standalone Door product (spec §4A)
 # ═══════════════════════════════════════════════════════════════════
 

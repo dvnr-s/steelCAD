@@ -95,7 +95,8 @@ class EstimateCreate(BaseModel):
     terms: Optional[str] = None
     discount_type: Optional[Literal["PERCENTAGE", "FLAT"]] = None
     discount_value: float = Field(default=0, ge=0)
-    advance_pct: float = Field(default=50, ge=0, le=100)
+    # None → the company's default_advance_pct applies.
+    advance_pct: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 class EstimateUpdate(BaseModel):
@@ -138,6 +139,7 @@ class EstimateDetail(BaseModel):
     discount_type: Optional[str] = None
     discount_value: float
     advance_pct: float
+    gst_pct: float
     frames: list[FrameDetail]
     subtotal: float
     discount_amount: float

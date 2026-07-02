@@ -509,6 +509,7 @@ def price_design(
     discount_type: Optional[str] = None,
     discount_value: float = 0,
     advance_pct: float = 50,
+    gst_pct: float = 18.0,
 ) -> dict:
     """
     Main pricing entry point. Performs full tree traversal per spec §9.1.
@@ -519,6 +520,7 @@ def price_design(
         discount_type: "PERCENTAGE" | "FLAT" | None.
         discount_value: Discount amount (percent or flat ₹).
         advance_pct: Advance percentage (default 50%).
+        gst_pct: GST percentage on the post-discount amount (default 18%).
 
     Returns:
         EstimateBreakdown dict with all line items, totals, GST.
@@ -560,7 +562,7 @@ def price_design(
 
     # 6. Taxable, GST, total
     taxable = _round2(subtotal - discount_amount)
-    gst = _round2(taxable * 0.18)              # PR-4: 18% GST
+    gst = _round2(taxable * gst_pct / 100)      # PR-4 (default 18%)
     grand_total = _round_rupee(taxable + gst)   # PR-3: nearest rupee
     advance_amount = _round_rupee(grand_total * advance_pct / 100)
 
@@ -587,8 +589,9 @@ def _apply_commercial_terms(
     discount_type: Optional[str],
     discount_value: float,
     advance_pct: float,
+    gst_pct: float = 18.0,
 ) -> dict:
-    """Apply discount → GST (18%) → grand total → advance to a subtotal."""
+    """Apply discount → GST → grand total → advance to a subtotal."""
     discount_amount = 0.0
     if discount_type == "PERCENTAGE" and discount_value > 0:
         discount_amount = _round2(subtotal * discount_value / 100)
@@ -596,7 +599,7 @@ def _apply_commercial_terms(
         discount_amount = _round2(min(discount_value, subtotal))
 
     taxable = _round2(subtotal - discount_amount)
-    gst = _round2(taxable * 0.18)
+    gst = _round2(taxable * gst_pct / 100)
     grand_total = _round_rupee(taxable + gst)
     advance_amount = _round_rupee(grand_total * advance_pct / 100)
     return {
@@ -614,6 +617,7 @@ def price_estimate(
     discount_type: Optional[str] = None,
     discount_value: float = 0,
     advance_pct: float = 50,
+    gst_pct: float = 18.0,
 ) -> dict:
     """
     Price a multi-frame estimate.
@@ -646,7 +650,7 @@ def price_estimate(
         })
 
     subtotal = _round2(subtotal)
-    terms = _apply_commercial_terms(subtotal, discount_type, discount_value, advance_pct)
+    terms = _apply_commercial_terms(subtotal, discount_type, discount_value, advance_pct, gst_pct)
 
     return {
         "frames": frame_lines,

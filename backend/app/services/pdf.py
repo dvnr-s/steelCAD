@@ -63,6 +63,7 @@ def render_estimate_html(estimate, company=None) -> str:
             "subtotal": float(estimate.subtotal or 0),
             "taxable": float(estimate.taxable or 0),
             "gst": float(estimate.gst or 0),
+            "gst_pct": f"{float(getattr(estimate, 'gst_pct', None) or 18):g}",
             "grand_total": int(estimate.grand_total or 0),
             "advance_pct": float(estimate.advance_pct or 0),
             "advance_amount": int(estimate.advance_amount or 0),
@@ -86,6 +87,7 @@ def render_estimate_html(estimate, company=None) -> str:
         },
         frames=frames,
         bom=build_bom(frames),
+        currency=getattr(company, "currency_symbol", None) or "₹",
         generated_at=datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC"),
     )
 

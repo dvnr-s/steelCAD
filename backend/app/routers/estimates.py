@@ -74,6 +74,9 @@ async def _recompute(estimate: Estimate, db: AsyncSession) -> None:
     terms = _apply_commercial_terms(
         subtotal, estimate.discount_type,
         float(estimate.discount_value or 0), float(estimate.advance_pct or 0),
+        # The estimate's FROZEN snapshot — a company GST change must never
+        # silently reprice an existing estimate through a recompute.
+        gst_pct=float(estimate.gst_pct if estimate.gst_pct is not None else 18),
     )
     estimate.rate_snapshot = snapshot
     estimate.subtotal = subtotal
@@ -98,6 +101,7 @@ def _detail(estimate: Estimate) -> EstimateDetail:
         discount_type=estimate.discount_type,
         discount_value=float(estimate.discount_value or 0),
         advance_pct=float(estimate.advance_pct or 0),
+        gst_pct=float(estimate.gst_pct if estimate.gst_pct is not None else 18),
         frames=[FrameDetail.model_validate(f) for f in estimate.frames],
         subtotal=float(estimate.subtotal or 0),
         discount_amount=float(estimate.discount_amount or 0),
@@ -232,6 +236,7 @@ async def create_estimate(
     if not customer:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Customer not found")
 
+    company = await get_or_create_company(db)
     today = datetime.now(timezone.utc).date()
     estimate = Estimate(
         customer_id=customer_id,
@@ -243,7 +248,10 @@ async def create_estimate(
         valid_until=data.valid_until or (today + timedelta(days=30)),
         discount_type=data.discount_type,
         discount_value=data.discount_value,
-        advance_pct=data.advance_pct,
+        # Company defaults: advance falls back when omitted; GST is snapshotted
+        # so later settings changes never reprice this estimate.
+        advance_pct=data.advance_pct if data.advance_pct is not None else float(company.default_advance_pct),
+        gst_pct=float(company.gst_pct),
         created_by=user.id,
     )
     estimate.customer = customer  # populate relationship to avoid an async lazy-load
@@ -372,6 +380,7 @@ async def duplicate_estimate(
     user: User = Depends(get_current_user),
 ):
     source = await _get_estimate_or_404(estimate_id, db)
+    company = await get_or_create_company(db)
     title = (source.title or f"EST-{source.number:04d}")
     copy = Estimate(
         customer_id=source.customer_id,
@@ -384,6 +393,8 @@ async def duplicate_estimate(
         discount_type=source.discount_type,
         discount_value=source.discount_value,
         advance_pct=source.advance_pct,
+        # A duplicate is a NEW quote — it snapshots today's GST setting.
+        gst_pct=float(company.gst_pct),
         created_by=user.id,
     )
     copy.customer = source.customer

@@ -7,7 +7,7 @@ this becomes one row per organization.
 """
 from datetime import datetime, timezone
 
-from sqlalchemy import Integer, String, Text, DateTime
+from sqlalchemy import Integer, Numeric, String, Text, DateTime
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -25,6 +25,11 @@ class CompanySettings(Base):
     gstin: Mapped[str | None] = mapped_column(String(20), nullable=True)
     bank_details: Mapped[str | None] = mapped_column(Text, nullable=True)
     default_terms: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Commercial defaults: new estimates snapshot gst_pct at creation;
+    # default_advance_pct applies when the creator doesn't specify one.
+    gst_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=18)
+    default_advance_pct: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=50)
+    currency_symbol: Mapped[str] = mapped_column(String(8), nullable=False, default="₹")
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),

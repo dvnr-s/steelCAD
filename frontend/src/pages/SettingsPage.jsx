@@ -7,6 +7,7 @@ import TopNav from '../components/TopNav'
 const EMPTY = {
   name: '', logo_data_url: null, address: '', phone: '', email: '',
   gstin: '', bank_details: '', default_terms: '',
+  gst_pct: 18, default_advance_pct: 50, currency_symbol: '₹',
 }
 
 const MAX_LOGO_BYTES = 250 * 1024  // keep the data-URL small enough to inline in the PDF
@@ -36,9 +37,14 @@ export default function SettingsPage() {
 
   const save = async () => {
     if (!form.name.trim()) { toast.error('Company name is required'); return }
+    const gst = Number(form.gst_pct)
+    const adv = Number(form.default_advance_pct)
+    if (Number.isNaN(gst) || gst < 0 || gst > 100) { toast.error('GST % must be between 0 and 100'); return }
+    if (Number.isNaN(adv) || adv < 0 || adv > 100) { toast.error('Advance % must be between 0 and 100'); return }
+    if (!String(form.currency_symbol || '').trim()) { toast.error('Currency symbol is required'); return }
     setSaving(true)
     try {
-      const { data } = await settingsApi.updateCompany(form)
+      const { data } = await settingsApi.updateCompany({ ...form, gst_pct: gst, default_advance_pct: adv })
       setForm({ ...EMPTY, ...data })
       toast.success('Company profile saved')
     } catch (err) {
@@ -92,6 +98,29 @@ export default function SettingsPage() {
           <div className="form-group"><label>Address</label><input value={form.address || ''} onChange={set('address')} placeholder="Street, city, state, PIN" /></div>
           <div className="form-group"><label>Bank details (for the PDF footer)</label><input value={form.bank_details || ''} onChange={set('bank_details')} placeholder="A/C name, number, IFSC, branch" /></div>
           <div className="form-group"><label>Default terms &amp; conditions</label><input value={form.default_terms || ''} onChange={set('default_terms')} placeholder="Used when an estimate has no terms of its own" /></div>
+
+          {/* Commercial defaults */}
+          <div style={{ height: 1, background: 'var(--c-border)' }} />
+          <div>
+            <label style={{ fontWeight: 600 }}>Commercial defaults</label>
+            <p className="text-muted text-sm" style={{ margin: '2px 0 10px' }}>
+              Applied to new estimates only — existing estimates keep the GST rate they were quoted at.
+            </p>
+            <div className="flex gap-3">
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>GST %</label>
+                <input type="number" min="0" max="100" step="0.5" value={form.gst_pct} onChange={set('gst_pct')} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Default advance %</label>
+                <input type="number" min="0" max="100" step="1" value={form.default_advance_pct} onChange={set('default_advance_pct')} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Currency symbol</label>
+                <input maxLength={8} value={form.currency_symbol || ''} onChange={set('currency_symbol')} placeholder="₹" />
+              </div>
+            </div>
+          </div>
 
           <div className="flex justify-end">
             <button className="btn btn-primary" onClick={save} disabled={saving}>

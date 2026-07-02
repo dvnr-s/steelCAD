@@ -373,6 +373,53 @@ class TestSettingsRBAC:
         assert r.status_code == 200 and r.json()["name"] == "Acme Steel"
 
 
+# ── Commercial settings: GST snapshot + advance fallback ──────────
+
+class TestCommercialSettings:
+    async def test_gst_snapshot_immutable_and_advance_fallback(self, client, db_session):
+        await seed_rates(db_session)
+        await create_user(db_session, "commercial@test.com", role="owner")
+        h = auth_headers(await login(client, "commercial@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "GST Co"})).json()["id"]
+        design_id = (await client.post("/designs", headers=h, json=make_design_payload("GST Win"))).json()["id"]
+
+        # Estimate created under the default settings → snapshots 18%.
+        est_old = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Old"})).json()
+        assert est_old["gst_pct"] == 18
+        est_old = (await client.post(f"/estimates/{est_old['id']}/frames", headers=h,
+                                     json={"source_design_id": design_id, "quantity": 1})).json()
+        gst_at_18 = est_old["gst"]
+        assert gst_at_18 > 0
+
+        # Change the company defaults.
+        r = await client.put("/settings/company", headers=h,
+                             json={"gst_pct": 12, "default_advance_pct": 30})
+        assert r.status_code == 200 and r.json()["gst_pct"] == 12
+
+        # New estimate (advance omitted) → snapshots 12% and falls back to 30%.
+        est_new = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "New"})).json()
+        assert est_new["gst_pct"] == 12
+        assert est_new["advance_pct"] == 30
+        est_new = (await client.post(f"/estimates/{est_new['id']}/frames", headers=h,
+                                     json={"source_design_id": design_id, "quantity": 1})).json()
+        assert est_new["gst"] == round(est_new["taxable"] * 0.12, 2)
+
+        # Explicit advance still wins over the fallback.
+        est_exp = (await client.post(f"/customers/{cust}/estimates", headers=h,
+                                     json={"title": "Explicit", "advance_pct": 70})).json()
+        assert est_exp["advance_pct"] == 70
+
+        # Recomputing the OLD estimate (terms update) must keep its frozen 18%.
+        est_old = (await client.put(f"/estimates/{est_old['id']}", headers=h,
+                                    json={"title": "Old renamed"})).json()
+        assert est_old["gst_pct"] == 18
+        assert est_old["gst"] == gst_at_18
+
+        # A duplicate is a new quote — it picks up the current 12% setting.
+        dup = (await client.post(f"/estimates/{est_old['id']}/duplicate", headers=h)).json()
+        assert dup["gst_pct"] == 12
+
+
 # ── Estimate listing: pagination, search, frame_count ──────────────
 
 class TestEstimateListing:

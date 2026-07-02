@@ -459,7 +459,7 @@ export default function EstimateBuilderPage() {
               ['Subtotal', money(est.subtotal)],
               est.discount_amount > 0 && [`Discount${est.discount_type === 'PERCENTAGE' ? ` (${est.discount_value}%)` : ''}`, `− ${money(est.discount_amount)}`],
               ['Taxable Amount', money(est.taxable)],
-              ['GST (18%)', money(est.gst)],
+              [`GST (${est.gst_pct ?? 18}%)`, money(est.gst)],
             ].filter(Boolean).map(([label, value]) => (
               <div key={label} className="flex justify-between" style={{ padding: '10px 20px', borderBottom: '1px solid var(--c-border)' }}>
                 <span style={{ fontWeight: 500 }}>{label}</span>

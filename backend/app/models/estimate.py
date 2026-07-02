@@ -44,6 +44,9 @@ class Estimate(Base):
     discount_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     discount_value: Mapped[float] = mapped_column(Numeric(12, 2), default=0)
     advance_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=50)
+    # GST % snapshot taken from company settings at creation — a settings change
+    # never silently reprices an existing estimate (same idea as rate_snapshot).
+    gst_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=18)
 
     # Snapshot of rates used at last recompute (reproducibility)
     rate_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)
