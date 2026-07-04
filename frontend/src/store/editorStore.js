@@ -193,6 +193,43 @@ function _layoutRegion(region, x, y, w, h) {
   return { ...base, split: { ...region.split, children: [ca, cb] } }
 }
 
+/**
+ * Re-derive geometry like `_layoutRegion`, but on a frame resize hold every split
+ * divider at its pre-resize absolute position instead of scaling with the frame.
+ * For each split we read its old absolute divider coordinate from the region's
+ * cached (pre-resize) geometry, then recompute the `position` fraction against the
+ * region's new size so the divider lands in the same spot. This is a single
+ * top-down pass because a nested split's new parent start/size depend on its
+ * ancestors' rewritten positions. `snapOffset` grid-snaps the ratio and clamps
+ * each side to MIN_SIDE (so shrinking too far pulls the divider inward rather than
+ * erroring). If a region has no cached geometry yet, we fall back to the existing
+ * fraction (proportional).
+ */
+function _relayoutKeepAbsolute(region, x, y, w, h) {
+  const base = { ...region, x: _clean(x), y: _clean(y), width: _clean(w), height: _clean(h) }
+  if (region.isLeaf || !region.split) return base
+  const { direction, position } = region.split
+  const [a, b] = region.split.children
+  const along = direction === 'vertical'
+  const size = along ? w : h
+  const oldStart = along ? region.x : region.y
+  const oldSize = along ? region.width : region.height
+  const hasOld = Number.isFinite(oldStart) && Number.isFinite(oldSize)
+  const newStart = along ? x : y
+  // Desired divider offset within the new region; fall back to old fraction if geom missing.
+  const desired = hasOld && size > 0 ? (oldStart + oldSize * position - newStart) / size : position
+  const pos = snapOffset(size, desired)
+  let ca, cb
+  if (along) {
+    ca = _relayoutKeepAbsolute(a, x, y, w * pos, h)
+    cb = _relayoutKeepAbsolute(b, x + w * pos, y, w * (1 - pos), h)
+  } else {
+    ca = _relayoutKeepAbsolute(a, x, y, w, h * pos)
+    cb = _relayoutKeepAbsolute(b, x, y + h * pos, w, h * (1 - pos))
+  }
+  return { ...base, split: { ...region.split, position: pos, children: [ca, cb] } }
+}
+
 /** Immutably apply `fn` to the region matching `regionId`. */
 function _mapRegionInTree(tree, regionId, fn) {
   return {
@@ -330,18 +367,24 @@ const useEditorStore = create((set, get) => ({
     else set({ tree: laid, isDirty: true })
   },
 
-  /** Resize the outer frame (drag a frame handle). Same live/commit pattern. */
+  /**
+   * Resize the outer frame (drag a frame handle). Same live/commit pattern.
+   * Splits are held at their absolute position (not scaled with the frame) via
+   * `_relayoutKeepAbsolute`, which rewrites each `split.position` fraction — the
+   * new fractions become the stored source of truth.
+   */
   setFrameSize: (rawW, rawH, { history = false } = {}) => {
     const { tree } = get()
     if (!tree) return
     const width = snapFrame(rawW)
     const height = snapFrame(rawH)
-    const laid = relayout({
+    const rootRegion = _relayoutKeepAbsolute(tree.frame.rootRegion, 0, 0, width, height)
+    const laid = {
       ...tree,
       outerWidth: width,
       outerHeight: height,
-      frame: { ...tree.frame, width, height },
-    })
+      frame: { ...tree.frame, width, height, rootRegion },
+    }
     if (history) get()._commit(laid)
     else set({ tree: laid, isDirty: true })
   },
