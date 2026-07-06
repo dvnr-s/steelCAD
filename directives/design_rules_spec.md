@@ -81,6 +81,11 @@ position      : number (0.0–1.0, ratio within parent region)
 absolutePos   : number (feet, computed from ratio × parent dimension)
 ```
 
+> **Frame resize preserves absolute divider position.** When the outer frame is resized,
+> each split is held at its absolute divider position (in feet) and its `position` ratio
+> is *recomputed* from the new parent size — distinct from a split-drag, which sets the
+> ratio directly (see §10.8 vs §10.9).
+
 > **No section/gauge override on splits.** All splits use the same section size and gauge as the Design root. Individual overrides are not supported — this matches actual fabrication practice.
 
 #### Overlay (grill only)
@@ -154,6 +159,11 @@ Dimensions flow **top-down** from the Design root:
      - ChildB.height = parentRegion.height × (1 − p)
      - Both children inherit parent width
 4. Position (x, y) of children is computed from parent position + split offset.
+
+> **Frame resize is position-preserving**: dimension derivation above applies for a fixed
+> set of split ratios. When the *frame itself* is resized, each split's ratio is first
+> recomputed so the divider keeps its absolute position (§10.8), then dimensions derive
+> top-down from the new ratios.
 
 > **Simplification**: Section depth (physical width of mullion/transom material) is NOT deducted from child region dimensions for pricing purposes. This matches current industry practice in the SteelQuote formulas. A future refinement can add deduction if needed.
 
@@ -741,9 +751,14 @@ Rates are resolved from a `RateConfig` table using a deterministic item code:
 
 ### 10.8 User resizes the outer frame
 1. Frame dimensions update.
-2. All descendant region dimensions **recompute** top-down.
-3. All pricing **recomputes** from new geometry (pane costs, infill costs, beading costs, grill costs).
-4. SS grill bar counts update based on new region heights.
+2. Each split divider is **held at its absolute position** (feet): its `position` ratio is
+   recomputed from the new parent size so the divider does not move. A split on the axis
+   *perpendicular* to the changed dimension is unaffected. Ratios are snapped to the grid
+   and clamped so each side keeps MIN_SIDE (shrinking the frame past that point pulls the
+   divider inward rather than producing an invalid region).
+3. All descendant region dimensions **recompute** top-down from the new ratios.
+4. All pricing **recomputes** from new geometry (pane costs, infill costs, beading costs, grill costs).
+5. SS grill bar counts update based on new region heights.
 
 ### 10.9 User drags a split to reposition it
 1. Split.position (ratio) updates.
