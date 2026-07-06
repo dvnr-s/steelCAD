@@ -214,7 +214,7 @@ function _relayoutKeepAbsolute(region, x, y, w, h) {
   const size = along ? w : h
   const oldStart = along ? region.x : region.y
   const oldSize = along ? region.width : region.height
-  const hasOld = Number.isFinite(oldStart) && Number.isFinite(oldSize)
+  const hasOld = Number.isFinite(oldStart) && Number.isFinite(oldSize) && oldSize > 0
   const newStart = along ? x : y
   // Desired divider offset within the new region; fall back to old fraction if geom missing.
   const desired = hasOld && size > 0 ? (oldStart + oldSize * position - newStart) / size : position
