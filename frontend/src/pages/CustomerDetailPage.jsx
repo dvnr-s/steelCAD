@@ -1,22 +1,72 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Plus, FileText, Trash2, Clock } from 'lucide-react'
+import { ArrowLeft, Plus, FileText, Trash2, Clock, Pencil, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { customersApi, estimatesApi } from '../api/client'
 import TopNav from '../components/TopNav'
+import { useConfirm } from '../components/ConfirmModal'
+import useAuthStore from '../store/authStore'
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
 }
 const money = (n) => `₹${Number(n).toLocaleString('en-IN')}`
 
+function CustomerEditModal({ customer, onClose, onSaved }) {
+  const [form, setForm] = useState({
+    name: customer.name || '', company: customer.company || '', phone: customer.phone || '',
+    email: customer.email || '', address: customer.address || '', gstin: customer.gstin || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
+
+  const submit = async (e) => {
+    e.preventDefault()
+    if (!form.name.trim()) { toast.error('Name is required'); return }
+    setSaving(true)
+    try {
+      const { data } = await customersApi.update(customer.id, form)
+      toast.success('Customer updated')
+      onSaved(data)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to update customer')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, backdropFilter: 'blur(4px)' }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <form className="card modal-card" style={{ '--modal-w': '440px', padding: 24 }} onSubmit={submit}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>Edit customer</h3>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="form-group" style={{ marginBottom: 10 }}><label>Name *</label><input value={form.name} onChange={set('name')} autoFocus /></div>
+        <div className="flex gap-3"><div className="form-group" style={{ flex: 1 }}><label>Company</label><input value={form.company} onChange={set('company')} /></div>
+          <div className="form-group" style={{ flex: 1 }}><label>Phone</label><input value={form.phone} onChange={set('phone')} /></div></div>
+        <div className="form-group" style={{ marginBottom: 10 }}><label>Email</label><input value={form.email} onChange={set('email')} /></div>
+        <div className="form-group" style={{ marginBottom: 10 }}><label>Address</label><input value={form.address} onChange={set('address')} /></div>
+        <div className="form-group" style={{ marginBottom: 16 }}><label>GSTIN</label><input value={form.gstin} onChange={set('gstin')} /></div>
+        <button type="submit" className="btn btn-primary w-full" disabled={saving}>
+          {saving ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Pencil size={15} />} Save changes
+        </button>
+      </form>
+    </div>
+  )
+}
+
 export default function CustomerDetailPage() {
   const { id } = useParams()
   const navigate = useNavigate()
   const [customer, setCustomer] = useState(null)
   const [estimates, setEstimates] = useState([])
+  const { confirm, ConfirmDialog } = useConfirm()
   const [loading, setLoading] = useState(true)
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const role = useAuthStore((s) => s.user?.role)
+  const canDelete = role === 'admin' || role === 'owner'
 
   const load = async () => {
     try {
@@ -28,7 +78,7 @@ export default function CustomerDetailPage() {
       setEstimates(e)
     } catch {
       toast.error('Customer not found')
-      navigate('/')
+      navigate('/customers')
     } finally {
       setLoading(false)
     }
@@ -38,7 +88,8 @@ export default function CustomerDetailPage() {
   const handleNewEstimate = async () => {
     setCreating(true)
     try {
-      const { data } = await estimatesApi.create(id, { advance_pct: 50 })
+      // No advance_pct — the backend applies the company default.
+      const { data } = await estimatesApi.create(id, {})
       navigate(`/estimates/${data.id}`)
     } catch {
       toast.error('Failed to create estimate')
@@ -48,7 +99,7 @@ export default function CustomerDetailPage() {
 
   const handleDelete = async (e, est) => {
     e.stopPropagation()
-    if (!confirm(`Delete estimate EST-${String(est.number).padStart(4, '0')}?`)) return
+    if (!await confirm(`Delete estimate EST-${String(est.number).padStart(4, '0')}?`, { title: 'Delete Estimate', confirmLabel: 'Delete' })) return
     try {
       await estimatesApi.delete(est.id)
       setEstimates((prev) => prev.filter((x) => x.id !== est.id))
@@ -66,7 +117,7 @@ export default function CustomerDetailPage() {
     <div className="dashboard-layout">
       <TopNav />
       <main className="dashboard-main fade-in">
-        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/')} style={{ marginBottom: 16 }}>
+        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/customers')} style={{ marginBottom: 16 }}>
           <ArrowLeft size={15} /> All customers
         </button>
 
@@ -83,6 +134,9 @@ export default function CustomerDetailPage() {
               </div>
               {customer.address && <div style={{ marginTop: 8, fontSize: '0.875rem', color: 'var(--c-text-muted)' }}>{customer.address}</div>}
             </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => setEditing(true)} title="Edit customer">
+              <Pencil size={14} /> Edit
+            </button>
           </div>
         </div>
 
@@ -117,7 +171,16 @@ export default function CustomerDetailPage() {
                   <tr key={est.id} style={{ borderTop: '1px solid var(--c-border)', cursor: 'pointer' }} onClick={() => navigate(`/estimates/${est.id}`)}>
                     <td style={{ padding: '12px 16px', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>
                       EST-{String(est.number).padStart(4, '0')}
-                      {est.status === 'final' && <span className="badge badge-brand" style={{ marginLeft: 8 }}>Final</span>}
+                      {est.revision > 1 && <span className="badge" style={{ marginLeft: 8 }}>rev {est.revision}</span>}
+                      {est.status === 'superseded' ? (
+                        <span className="badge" style={{ marginLeft: 8, color: '#a855f7', border: '1px solid #a855f7', background: 'transparent' }}>superseded</span>
+                      ) : est.status !== 'draft' && (
+                        <span className="badge" style={{ marginLeft: 8, textTransform: 'capitalize' }}>{est.status}</span>
+                      )}
+                      {est.is_expired && (
+                        <span className="badge" title="Past its valid-until date — consider revising"
+                          style={{ marginLeft: 8, color: '#f97316', border: '1px solid #f97316', background: 'transparent' }}>expired</span>
+                      )}
                     </td>
                     <td style={{ padding: '12px 16px', color: 'var(--c-text-muted)' }}>{est.title || '—'}</td>
                     <td style={{ padding: '12px 16px', textAlign: 'center' }}>{est.frame_count}</td>
@@ -126,9 +189,11 @@ export default function CustomerDetailPage() {
                       <span className="flex items-center gap-1" style={{ justifyContent: 'flex-end' }}><Clock size={11} /> {formatDate(est.updated_at)}</span>
                     </td>
                     <td style={{ padding: '8px 12px', textAlign: 'right' }}>
-                      <button className="btn btn-ghost btn-sm btn-icon" style={{ color: 'var(--c-error)' }} onClick={(e) => handleDelete(e, est)} title="Delete estimate">
-                        <Trash2 size={14} />
-                      </button>
+                      {canDelete && (
+                        <button className="btn btn-ghost btn-sm btn-icon" style={{ color: 'var(--c-error)' }} onClick={(e) => handleDelete(e, est)} title="Delete estimate">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -137,6 +202,14 @@ export default function CustomerDetailPage() {
           </div>
         )}
       </main>
+      {editing && (
+        <CustomerEditModal
+          customer={customer}
+          onClose={() => setEditing(false)}
+          onSaved={(updated) => { setCustomer(updated); setEditing(false) }}
+        />
+      )}
+      {ConfirmDialog}
     </div>
   )
 }

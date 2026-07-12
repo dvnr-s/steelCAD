@@ -59,9 +59,18 @@ export default api
 
 // ─── Auth ─────────────────────────────────────────────────────────
 export const authApi = {
-  register: (data) => api.post('/auth/register', data),
   login: (data) => api.post('/auth/login', data),
   me: () => api.get('/auth/me'),
+  changePassword: (data) => api.post('/auth/change-password', data),
+}
+
+// ─── Users (invite-only management) ──────────────────────────────
+export const usersApi = {
+  list: () => api.get('/users'),
+  create: (data) => api.post('/users', data),
+  updateRole: (id, role) => api.patch(`/users/${id}/role`, { role }),
+  resetPassword: (id, newPassword) => api.patch(`/users/${id}/password`, { new_password: newPassword }),
+  delete: (id) => api.delete(`/users/${id}`),
 }
 
 // ─── Designs ──────────────────────────────────────────────────────
@@ -71,6 +80,7 @@ export const designsApi = {
   create: (data) => api.post('/designs', data),
   update: (id, data) => api.put(`/designs/${id}`, data),
   delete: (id) => api.delete(`/designs/${id}`),
+  restore: (id) => api.post(`/designs/${id}/restore`),
 }
 
 // ─── Stateless price preview (live canvas pricing) ───────────────────
@@ -83,19 +93,27 @@ export const customersApi = {
   create: (data) => api.post('/customers', data),
   update: (id, data) => api.put(`/customers/${id}`, data),
   delete: (id) => api.delete(`/customers/${id}`),
+  restore: (id) => api.post(`/customers/${id}/restore`),
 }
 
 // ─── Estimates (customer-scoped, multi-frame) ─────────────────────
 export const estimatesApi = {
-  listForCustomer: (customerId) => api.get(`/customers/${customerId}/estimates`),
+  search: (params) => api.get('/estimates', { params }),
+  listForCustomer: (customerId, params) => api.get(`/customers/${customerId}/estimates`, { params }),
   create: (customerId, data) => api.post(`/customers/${customerId}/estimates`, data),
   get: (id) => api.get(`/estimates/${id}`),
   update: (id, data) => api.put(`/estimates/${id}`, data),
+  setStatus: (id, status) => api.patch(`/estimates/${id}/status`, { status }),
+  duplicate: (id) => api.post(`/estimates/${id}/duplicate`),
+  revise: (id) => api.post(`/estimates/${id}/revise`),
+  restore: (id) => api.post(`/estimates/${id}/restore`),
   delete: (id) => api.delete(`/estimates/${id}`),
   addFrame: (id, data) => api.post(`/estimates/${id}/frames`, data),
   updateFrame: (id, frameId, data) => api.put(`/estimates/${id}/frames/${frameId}`, data),
+  duplicateFrame: (id, frameId) => api.post(`/estimates/${id}/frames/${frameId}/duplicate`),
   deleteFrame: (id, frameId) => api.delete(`/estimates/${id}/frames/${frameId}`),
   downloadPdf: (id) => api.get(`/estimates/${id}/pdf`, { responseType: 'blob' }),
+  downloadBomCsv: (id) => api.get(`/estimates/${id}/bom.csv`, { responseType: 'blob' }),
 }
 
 // ─── Rates ────────────────────────────────────────────────────────
@@ -103,4 +121,25 @@ export const ratesApi = {
   list: () => api.get('/rates'),
   update: (itemCode, data) => api.put(`/rates/${itemCode}`, data),
   seed: () => api.post('/rates/seed'),
+}
+
+// ─── Company settings (PDF branding) ──────────────────────────────
+export const settingsApi = {
+  getCompany: () => api.get('/settings/company'),
+  updateCompany: (data) => api.put('/settings/company', data),
+}
+
+// ─── Audit / activity trail (admin/owner) ─────────────────────────
+export const auditApi = {
+  list: (params) => api.get('/audit', { params }),
+}
+
+// ─── Trash (soft-deleted records, admin/owner) ────────────────────
+export const trashApi = {
+  list: () => api.get('/trash'),
+}
+
+// ─── Dashboard metrics ────────────────────────────────────────────
+export const dashboardApi = {
+  metrics: () => api.get('/dashboard/metrics'),
 }

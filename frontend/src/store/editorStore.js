@@ -162,6 +162,24 @@ export function findRegionNode(region, id) {
 }
 
 /**
+ * All leaf region ids in depth-first (reading) order — the keyboard tab-cycle
+ * order for canvas region selection.
+ */
+export function listLeafIds(tree) {
+  const ids = []
+  const walk = (region) => {
+    if (!region) return
+    if (region.isLeaf || !region.split) {
+      ids.push(region.id)
+      return
+    }
+    region.split.children.forEach(walk)
+  }
+  walk(tree?.frame?.rootRegion)
+  return ids
+}
+
+/**
  * Re-derive x/y/width/height for every region from the frame size and each
  * split's position. This is the single source of truth for geometry — any
  * drag just updates a split position (or the frame size) and calls relayout.
@@ -262,6 +280,9 @@ const useEditorStore = create((set, get) => ({
 
   // Selection
   selectedId: null,
+
+  // Region clipboard (copy/paste a leaf's type/pane/grill/hardware onto another leaf).
+  clipboard: null,
 
   // Active canvas tool: null | 'vertical' | 'horizontal' (drag-to-add mullion)
   addMode: null,
@@ -416,6 +437,40 @@ const useEditorStore = create((set, get) => ({
     if (!tree) return
     const newTree = _updateRegionInTree(tree, regionId, patch)
     get()._commit(newTree)
+  },
+
+  /** Copy a leaf region's type/pane/grill/hardware to the clipboard. */
+  copyRegion: (regionId) => {
+    const { tree } = get()
+    if (!tree) return false
+    const r = findRegionNode(tree.frame.rootRegion, regionId)
+    if (!r || !r.isLeaf) return false
+    set({ clipboard: {
+      regionType: r.regionType ?? 'open',
+      paneSpec: r.paneSpec ? { ...r.paneSpec } : null,
+      overlays: (r.overlays || []).map((o) => ({ ...o })),
+      hardware: (r.hardware || []).map((h) => ({ ...h })),
+      doorHand: r.doorHand ?? null,
+      rebate: r.rebate ?? null,
+    } })
+    return true
+  },
+
+  /** Paste the clipboard onto another leaf region (regenerating overlay/hardware ids). */
+  pasteOnto: (regionId) => {
+    const { tree, clipboard } = get()
+    if (!tree || !clipboard) return false
+    const target = findRegionNode(tree.frame.rootRegion, regionId)
+    if (!target || !target.isLeaf) return false
+    get().updateRegion(regionId, {
+      regionType: clipboard.regionType,
+      paneSpec: clipboard.paneSpec ? { ...clipboard.paneSpec } : null,
+      overlays: clipboard.overlays.map((o) => ({ ...o, id: crypto.randomUUID() })),
+      hardware: clipboard.hardware.map((h) => ({ ...h, id: crypto.randomUUID() })),
+      doorHand: clipboard.doorHand,
+      rebate: clipboard.rebate,
+    })
+    return true
   },
 
   /**

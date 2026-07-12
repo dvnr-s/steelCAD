@@ -6,10 +6,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.rate import Rate
-from app.models.user import User
+from app.models.rate import Rate, RateHistory
+from app.models.user import User, ROLE_ADMIN, ROLE_OWNER
 from app.schemas.rate import RateResponse, RateUpdate
-from app.services.auth import get_current_user, require_admin
+from app.services.auth import get_current_user, require_role
+from app.services.audit import record_audit
 from app.services.pricing import DEFAULT_RATES
 
 router = APIRouter(prefix="/rates", tags=["Rates"])
@@ -33,7 +34,7 @@ async def update_rate(
     item_code: str,
     data: RateUpdate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
     result = await db.execute(select(Rate).where(Rate.item_code == item_code))
     rate = result.scalar_one_or_none()
@@ -43,9 +44,13 @@ async def update_rate(
             detail=f"Rate '{item_code}' not found",
         )
 
+    old_rate = float(rate.rate)
     rate.rate = data.rate
+    db.add(RateHistory(item_code=item_code, old_rate=old_rate, new_rate=data.rate, actor_id=user.id))
     await db.flush()
     await db.refresh(rate)
+    await record_audit(db, user, "rate.update", "rate", item_code,
+                       f"{item_code}: ₹{old_rate} → ₹{data.rate}")
     return rate
 
 
@@ -56,7 +61,7 @@ async def update_rate(
 )
 async def seed_rates(
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(require_admin),
+    user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
     """Populate the rates table with default values. Skips existing item codes."""
     created = 0

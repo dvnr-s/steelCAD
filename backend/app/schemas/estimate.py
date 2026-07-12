@@ -4,11 +4,13 @@ Estimate-related Pydantic schemas.
 Hierarchy: Customer → Estimate → EstimateFrame (one geometry per frame, × qty).
 Estimate-level discount/GST/advance apply to the aggregate of frame line totals.
 """
-from datetime import datetime
+from datetime import datetime, date
 from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+EstimateStatus = Literal["draft", "sent", "accepted", "rejected"]
 
 
 # ─── Per-unit breakdown sub-schemas (output of the pricing engine) ──
@@ -89,18 +91,27 @@ class FrameDetail(BaseModel):
 class EstimateCreate(BaseModel):
     title: Optional[str] = None
     notes: Optional[str] = None
+    valid_until: Optional[date] = None
+    terms: Optional[str] = None
     discount_type: Optional[Literal["PERCENTAGE", "FLAT"]] = None
     discount_value: float = Field(default=0, ge=0)
-    advance_pct: float = Field(default=50, ge=0, le=100)
+    # None → the company's default_advance_pct applies.
+    advance_pct: Optional[float] = Field(default=None, ge=0, le=100)
 
 
 class EstimateUpdate(BaseModel):
+    """Commercial terms + metadata. Status flows through PATCH /status only."""
     title: Optional[str] = None
     notes: Optional[str] = None
-    status: Optional[Literal["draft", "final"]] = None
+    valid_until: Optional[date] = None
+    terms: Optional[str] = None
     discount_type: Optional[Literal["PERCENTAGE", "FLAT"]] = None
     discount_value: Optional[float] = Field(default=None, ge=0)
     advance_pct: Optional[float] = Field(default=None, ge=0, le=100)
+
+
+class EstimateStatusUpdate(BaseModel):
+    status: EstimateStatus
 
 
 class CustomerBrief(BaseModel):
@@ -118,13 +129,21 @@ class CustomerBrief(BaseModel):
 class EstimateDetail(BaseModel):
     id: UUID
     number: int
+    revision: int = 1
+    parent_id: Optional[UUID] = None
     title: Optional[str] = None
     notes: Optional[str] = None
     status: str
+    quote_date: Optional[date] = None
+    valid_until: Optional[date] = None
+    terms: Optional[str] = None
     customer: CustomerBrief
     discount_type: Optional[str] = None
     discount_value: float
     advance_pct: float
+    gst_pct: float
+    # Derived: sent quote past its valid_until date (never stored).
+    is_expired: bool = False
     frames: list[FrameDetail]
     subtotal: float
     discount_amount: float
@@ -141,12 +160,14 @@ class EstimateDetail(BaseModel):
 class EstimateSummary(BaseModel):
     id: UUID
     number: int
+    revision: int = 1
     title: Optional[str] = None
     status: str
     customer_id: UUID
     customer_name: str
     frame_count: int
     grand_total: int
+    is_expired: bool = False
     created_at: datetime
     updated_at: datetime
 

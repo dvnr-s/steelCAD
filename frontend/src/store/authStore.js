@@ -20,15 +20,6 @@ const useAuthStore = create(
         return me.data
       },
 
-      register: async (email, password, name) => {
-        const { data } = await authApi.register({ email, password, name })
-        localStorage.setItem('access_token', data.access_token)
-        localStorage.setItem('refresh_token', data.refresh_token)
-        const me = await authApi.me()
-        set({ user: me.data, isAuthenticated: true })
-        return me.data
-      },
-
       logout: () => {
         localStorage.removeItem('access_token')
         localStorage.removeItem('refresh_token')

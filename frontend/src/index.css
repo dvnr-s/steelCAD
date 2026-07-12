@@ -195,6 +195,14 @@ select option { background: var(--c-surface-2); }
   padding: 20px;
 }
 
+/* Modal dialogs — desired width via --modal-w, never wider than the viewport
+   (usable at 375px), never taller than the screen. */
+.modal-card {
+  width: min(var(--modal-w, 520px), calc(100vw - 32px));
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
 /* ─── Badges ─────────────────────────────────────────────────────── */
 .badge {
   display: inline-flex;

@@ -2,13 +2,14 @@
  * Editor page — the main design workspace.
  * Left: layer tree (future) | Center: Konva canvas | Right: properties panel
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ArrowLeft, Save, Check, Undo2, Redo2, AlertTriangle, CheckCircle2, SeparatorVertical, SeparatorHorizontal, MousePointer2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
+import { ArrowLeft, Save, Check, Undo2, Redo2, AlertTriangle, CheckCircle2, SeparatorVertical, SeparatorHorizontal, MousePointer2, HelpCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
-import useEditorStore from '../store/editorStore'
+import useEditorStore, { listLeafIds } from '../store/editorStore'
 import { designsApi, estimatesApi, pricePreview } from '../api/client'
 import { validateTree } from '../lib/validators'
+import { useConfirm } from '../components/ConfirmModal'
 import DesignCanvas from '../components/DesignCanvas'
 import PropertiesPanel from '../components/PropertiesPanel'
 
@@ -177,11 +178,18 @@ export default function EditorPage() {
   const canRedo = useEditorStore((s) => s.future.length > 0)
   const addMode = useEditorStore((s) => s.addMode)
   const setAddMode = useEditorStore((s) => s.setAddMode)
+  const selectedId = useEditorStore((s) => s.selectedId)
+  const copyRegion = useEditorStore((s) => s.copyRegion)
+  const pasteOnto = useEditorStore((s) => s.pasteOnto)
 
   const [loading, setLoading] = useState(!!id || frameMode)
   const [saving, setSaving] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
+  // Pricing fetch failed — the displayed price no longer matches the tree.
+  const [priceStale, setPriceStale] = useState(false)
   const canvasRef = useRef(null)
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 })
+  const { confirm, ConfirmDialog } = useConfirm()
 
   // Live design validation — mirrors backend rules for instant feedback.
   const issues = useMemo(() => (tree ? validateTree(tree) : []), [tree])
@@ -228,10 +236,33 @@ export default function EditorPage() {
       .finally(() => setLoading(false))
   }, [id, frameId, estimateId])
 
-  // Keyboard shortcuts — Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo
+  // Keyboard shortcuts — Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo.
+  // Tab / Shift+Tab / arrows cycle canvas region selection (keyboard access —
+  // Konva shapes aren't focusable).
   useEffect(() => {
     const onKeyDown = (e) => {
-      if (e.key === 'Escape') { setAddMode(null); return }
+      // Don't hijack typing in form fields.
+      const tag = e.target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.key === 'Escape') { setAddMode(null); setShowHelp(false); return }
+      if (e.key === '?') { setShowHelp((v) => !v); return }
+
+      const cycleKeys = ['Tab', 'ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp']
+      if (cycleKeys.includes(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        const { tree: t, selectedId: sel, select: doSelect } = useEditorStore.getState()
+        const leaves = t ? listLeafIds(t) : []
+        if (leaves.length > 0) {
+          e.preventDefault()
+          const backwards = (e.key === 'Tab' && e.shiftKey) || e.key === 'ArrowLeft' || e.key === 'ArrowUp'
+          const idx = leaves.indexOf(sel)
+          const next = idx === -1
+            ? (backwards ? leaves.length - 1 : 0)
+            : (idx + (backwards ? -1 : 1) + leaves.length) % leaves.length
+          doSelect(leaves[next])
+        }
+        return
+      }
+
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       const key = e.key.toLowerCase()
@@ -241,27 +272,43 @@ export default function EditorPage() {
       } else if ((key === 'z' && e.shiftKey) || key === 'y') {
         e.preventDefault()
         redo()
+      } else if (key === 'c' && selectedId) {
+        if (copyRegion(selectedId)) { e.preventDefault(); toast.success('Region copied') }
+      } else if (key === 'v' && selectedId) {
+        if (pasteOnto(selectedId)) { e.preventDefault(); toast.success('Pasted onto region') }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [undo, redo, setAddMode])
+  }, [undo, redo, setAddMode, selectedId, copyRegion, pasteOnto])
 
-  // Refresh live unit price whenever tree changes (debounced)
+  // Warn on browser-level navigation (refresh / close / hard nav) with unsaved edits.
+  useEffect(() => {
+    if (!isDirty) return
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [isDirty])
+
+  // Refresh live unit price whenever tree changes (debounced).
+  // On failure keep the last known price but flag it stale.
+  const refreshPrice = useCallback(async () => {
+    try {
+      const { data } = await pricePreview(useEditorStore.getState().tree)
+      setLivePrice(data)
+      setPriceStale(false)
+    } catch {
+      setPriceStale(true)
+    }
+  }, [setLivePrice])
+
   const priceTimeout = useRef(null)
   useEffect(() => {
     if (!tree) return
     clearTimeout(priceTimeout.current)
-    priceTimeout.current = setTimeout(async () => {
-      try {
-        const { data } = await pricePreview(tree)
-        setLivePrice(data)
-      } catch {
-        // silently ignore pricing errors during editing
-      }
-    }, 600)
+    priceTimeout.current = setTimeout(refreshPrice, 600)
     return () => clearTimeout(priceTimeout.current)
-  }, [tree])
+  }, [tree, refreshPrice])
 
   const handleSave = async () => {
     if (!tree) return
@@ -297,6 +344,17 @@ export default function EditorPage() {
     navigate(`/estimates/${estimateId}`)
   }
 
+  const backTo = frameMode ? `/estimates/${estimateId}` : '/designs'
+  const handleBack = async () => {
+    if (isDirty) {
+      const ok = await confirm('You have unsaved changes. Leave without saving?', {
+        title: 'Unsaved changes', confirmLabel: 'Leave',
+      })
+      if (!ok) return
+    }
+    navigate(backTo)
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center" style={{ height: '100vh' }}>
@@ -307,11 +365,33 @@ export default function EditorPage() {
 
   return (
     <div className="editor-layout">
+      {ConfirmDialog}
+      {showHelp && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+          onClick={() => setShowHelp(false)}>
+          <div className="card modal-card" style={{ '--modal-w': '380px', padding: 24 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0, marginBottom: 14 }}>Keyboard shortcuts</h3>
+            {[
+              ['Ctrl/⌘ + Z', 'Undo'],
+              ['Ctrl/⌘ + Shift + Z / Y', 'Redo'],
+              ['Ctrl/⌘ + C', 'Copy selected region'],
+              ['Ctrl/⌘ + V', 'Paste onto selected region'],
+              ['Esc', 'Cancel tool / close'],
+              ['?', 'Toggle this help'],
+            ].map(([k, d]) => (
+              <div key={k} className="flex items-center justify-between" style={{ padding: '5px 0', fontSize: '0.875rem' }}>
+                <span style={{ color: 'var(--c-text-muted)' }}>{d}</span>
+                <kbd style={{ fontFamily: 'var(--font-mono)', fontSize: '0.78rem', background: 'var(--c-surface-2)', border: '1px solid var(--c-border)', borderRadius: 4, padding: '2px 6px' }}>{k}</kbd>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {/* Top bar */}
       <div className="editor-topbar">
-        <Link to={frameMode ? `/estimates/${estimateId}` : '/designs'} className="btn btn-ghost btn-sm btn-icon" title="Back">
+        <button onClick={handleBack} className="btn btn-ghost btn-sm btn-icon" title="Back">
           <ArrowLeft size={17} />
-        </Link>
+        </button>
 
         <div style={{ flex: 1 }}>
           <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{designName}</span>
@@ -325,6 +405,21 @@ export default function EditorPage() {
           )}
         </div>
 
+        {priceStale && (
+          <button
+            onClick={refreshPrice}
+            title="Live pricing failed — the shown price may not match your latest edits. Click to retry."
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 4,
+              padding: '2px 8px', marginRight: 8,
+              fontSize: '0.6875rem', fontWeight: 600,
+              color: '#92400e', background: '#fef3c7',
+              border: '1px solid #fcd34d', borderRadius: 999, cursor: 'pointer',
+            }}
+          >
+            price outdated — retry
+          </button>
+        )}
         <PriceDisplay price={livePrice} />
 
         <div className="flex gap-1" style={{ marginRight: 4 }}>
@@ -343,6 +438,13 @@ export default function EditorPage() {
             title="Redo (Ctrl+Shift+Z)"
           >
             <Redo2 size={16} />
+          </button>
+          <button
+            className="btn btn-ghost btn-sm btn-icon"
+            onClick={() => setShowHelp(true)}
+            title="Keyboard shortcuts (?)"
+          >
+            <HelpCircle size={16} />
           </button>
         </div>
 
@@ -452,7 +554,11 @@ export default function EditorPage() {
       </div>
 
       {/* Center: canvas */}
-      <div className="editor-canvas" ref={canvasRef} style={{ position: 'relative' }}>
+      <div
+        className="editor-canvas" ref={canvasRef} style={{ position: 'relative' }}
+        tabIndex={0} role="application"
+        aria-label="Design canvas — Tab or arrow keys cycle region selection"
+      >
         {/* Floating tool palette */}
         <div style={{
           position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',

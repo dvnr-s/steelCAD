@@ -2,19 +2,24 @@
 Designs router — CRUD operations for steel window/door designs.
 Validates tree structure on create and update.
 """
+from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.design import Design
-from app.models.user import User
+from app.models.user import User, ROLE_ADMIN, ROLE_OWNER
 from app.schemas.design import (
     DesignCreate, DesignUpdate, DesignResponse, DesignListItem,
 )
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user, require_role
+from app.services.access import assert_can_write
+from app.services.audit import record_audit
+from app.services.diagram import tree_to_svg
 from app.services.validation import validate_design_tree
 
 router = APIRouter(prefix="/designs", tags=["Designs"])
@@ -42,14 +47,16 @@ def _design_response(design: Design) -> DesignResponse:
 async def list_designs(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    q: str | None = Query(None, description="Search name / description"),
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    stmt = select(Design).where(Design.deleted_at.is_(None))
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(or_(Design.name.ilike(like), Design.description.ilike(like)))
     result = await db.execute(
-        select(Design)
-        .order_by(Design.updated_at.desc())
-        .offset(skip)
-        .limit(limit)
+        stmt.order_by(Design.updated_at.desc()).offset(skip).limit(limit)
     )
     designs = result.scalars().all()
 
@@ -108,13 +115,41 @@ async def create_design(
     return _design_response(design)
 
 
+@router.get("/{design_id}/thumbnail.svg", summary="Design schematic thumbnail", response_class=Response)
+async def design_thumbnail(
+    design_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Design).where(Design.id == design_id, Design.deleted_at.is_(None))
+    )
+    design = result.scalar_one_or_none()
+    if not design:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Design not found")
+
+    # The SVG is a pure function of the tree, which only changes on update —
+    # updated_at makes a valid ETag, so unchanged thumbnails revalidate as 304.
+    etag = f'W/"{design.id}:{design.updated_at.isoformat()}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+    return Response(
+        content=tree_to_svg(design.tree_json or {}),
+        media_type="image/svg+xml",
+        headers={"ETag": etag, "Cache-Control": "private, max-age=3600"},
+    )
+
+
 @router.get("/{design_id}", response_model=DesignResponse, summary="Get a design by ID")
 async def get_design(
     design_id: UUID,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(Design).where(Design.id == design_id))
+    result = await db.execute(
+        select(Design).where(Design.id == design_id, Design.deleted_at.is_(None))
+    )
     design = result.scalar_one_or_none()
     if not design:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Design not found")
@@ -129,10 +164,13 @@ async def update_design(
     db: AsyncSession = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(Design).where(Design.id == design_id))
+    result = await db.execute(
+        select(Design).where(Design.id == design_id, Design.deleted_at.is_(None))
+    )
     design = result.scalar_one_or_none()
     if not design:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Design not found")
+    assert_can_write(design, user)
 
     if data.name is not None:
         design.name = data.name
@@ -166,11 +204,34 @@ async def update_design(
 async def delete_design(
     design_id: UUID,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
-    result = await db.execute(select(Design).where(Design.id == design_id))
+    result = await db.execute(
+        select(Design).where(Design.id == design_id, Design.deleted_at.is_(None))
+    )
     design = result.scalar_one_or_none()
     if not design:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Design not found")
 
-    await db.delete(design)
+    # Soft-delete: recoverable via POST /designs/{id}/restore.
+    design.deleted_at = datetime.now(timezone.utc)
+    await record_audit(db, user, "design.delete", "design", design.id, design.name)
+
+
+@router.post("/{design_id}/restore", response_model=DesignResponse, summary="Restore a soft-deleted design")
+async def restore_design(
+    design_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
+):
+    result = await db.execute(
+        select(Design).where(Design.id == design_id, Design.deleted_at.is_not(None))
+    )
+    design = result.scalar_one_or_none()
+    if not design:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Deleted design not found")
+    design.deleted_at = None
+    await db.flush()
+    await record_audit(db, user, "design.restore", "design", design.id, design.name)
+    await db.refresh(design)
+    return _design_response(design)

@@ -30,10 +30,24 @@
   .ta-c { text-align: center; }
   .mono { font-variant-numeric: tabular-nums; }
 
-  .frame-detail { margin-top: 6px; }
+  .frame-detail { margin-top: 6px; page-break-inside: avoid; }
   .frame-detail .fname { font-weight: 700; font-size: 11px; margin: 14px 0 4px; color: #374151; }
+  /* Lay the diagram + breakdown out as a 2-cell table. WeasyPrint sizes tables
+     reliably; with flexbox a <table> flex-child ignores min-width:0 and takes its
+     max-content width, pushing the Amount column off the page. */
+  .frame-body { width: 100%; table-layout: fixed; }
+  .frame-body td.fb-diagram { width: 184px; padding: 0 14px 0 0; border: none; vertical-align: top; }
+  .frame-body td.fb-items { padding: 0; border: none; vertical-align: top; }
+  .frame-diagram { width: 170px; border: 1px solid #e5e7eb; border-radius: 4px;
+                   padding: 6px; background: #fcfcfd; text-align: center; }
+  .frame-diagram img, .frame-diagram svg { max-width: 158px; max-height: 200px; }
+  .items { table-layout: fixed; }
+  .items col.c-item { width: 27%; }
+  .items col.c-desc { width: 49%; }
+  .items col.c-amt  { width: 24%; }
   .items th { text-align: left; padding: 4px 8px; font-size: 8.5px; color: #9ca3af; text-transform: uppercase; }
-  .items td { padding: 3px 8px; border-bottom: 1px solid #f3f4f6; color: #4b5563; font-size: 10px; }
+  .items td { padding: 3px 8px; border-bottom: 1px solid #f3f4f6; color: #4b5563; font-size: 10px;
+              word-wrap: break-word; overflow-wrap: break-word; }
 
   .totals { margin-top: 18px; margin-left: auto; width: 48%; }
   .totals td { padding: 5px 9px; }
@@ -48,14 +62,25 @@
 </head>
 <body>
   <div class="header">
-    <div>
-      <div class="brand">SteelCAD</div>
-      <div class="brand-sub">Steel Doors &amp; Windows — Estimate</div>
+    <div style="display:flex; align-items:flex-start; gap:12px;">
+      {% if company.logo_data_url %}<img src="{{ company.logo_data_url }}" style="max-height:54px; max-width:160px;" />{% endif %}
+      <div>
+        <div class="brand">{{ company.name }}</div>
+        <div class="brand-sub">Steel Doors &amp; Windows</div>
+        {% if company.address %}<div class="brand-sub">{{ company.address }}</div>{% endif %}
+        <div class="brand-sub">
+          {% if company.phone %}{{ company.phone }}{% endif %}
+          {% if company.email %} · {{ company.email }}{% endif %}
+          {% if company.gstin %} · GSTIN: {{ company.gstin }}{% endif %}
+        </div>
+      </div>
     </div>
     <div class="doc-meta">
-      <div class="title">ESTIMATE</div>
-      <div class="num">EST-{{ "%04d"|format(estimate.number) }}</div>
-      <div class="date">{{ created_at }}</div>
+      <div class="title">QUOTATION</div>
+      <div class="num">EST-{{ "%04d"|format(estimate.number) }}{% if estimate.revision and estimate.revision > 1 %} rev {{ estimate.revision }}{% endif %}</div>
+      <div class="date">Date: {{ estimate.quote_date }}</div>
+      {% if estimate.valid_until %}<div class="date">Valid until: {{ estimate.valid_until }}</div>{% endif %}
+      <div class="date">Status: {{ estimate.status|capitalize }}</div>
     </div>
   </div>
 
@@ -71,7 +96,6 @@
     </div>
     <div class="party" style="text-align:right;">
       {% if estimate.title %}<div class="label">Project</div><div class="name">{{ estimate.title }}</div>{% endif %}
-      <div style="margin-top:6px; color:#6b7280;">Status: {{ estimate.status|capitalize }}</div>
     </div>
   </div>
 
@@ -96,8 +120,8 @@
         <td>{{ f.dimensions }}</td>
         <td>{{ f.section }}</td>
         <td class="ta-c mono">{{ f.quantity }}</td>
-        <td class="ta-r mono">₹{{ f.unit_subtotal|money }}</td>
-        <td class="ta-r mono"><strong>₹{{ f.line_total|money }}</strong></td>
+        <td class="ta-r mono">{{ currency }}{{ f.unit_subtotal|money }}</td>
+        <td class="ta-r mono"><strong>{{ currency }}{{ f.line_total|money }}</strong></td>
       </tr>
       {% endfor %}
       {% if not frames %}
@@ -110,53 +134,97 @@
   {% for f in frames %}
   <div class="frame-detail">
     <div class="fname">{{ loop.index }}. {{ f.name }} — unit breakdown ({{ f.dimensions }})</div>
+    <table class="frame-body">
+    <tr>
+    <td class="fb-diagram">
+    <div class="frame-diagram">
+      {{ f.diagram_svg|safe }}
+    </div>
+    </td>
+    <td class="fb-items">
     <table class="items">
+      <colgroup>
+        <col class="c-item" /><col class="c-desc" /><col class="c-amt" />
+      </colgroup>
       <thead>
         <tr><th>Item</th><th>Description</th><th class="ta-r">Amount</th></tr>
       </thead>
       <tbody>
         {% set bd = f.breakdown %}
         {% if bd.frame %}
-        <tr><td>{{ bd.frame.label }}</td><td>{{ bd.frame.description }}</td><td class="ta-r mono">₹{{ bd.frame.cost|money }}</td></tr>
+        <tr><td>{{ bd.frame.label }}</td><td>{{ bd.frame.description }}</td><td class="ta-r mono">{{ currency }}{{ bd.frame.cost|money }}</td></tr>
         {% endif %}
         {% for s in bd.splits %}
-        <tr><td>{{ s.label }}</td><td>{{ s.description }}</td><td class="ta-r mono">₹{{ s.cost|money }}</td></tr>
+        <tr><td>{{ s.label }}</td><td>{{ s.description }}</td><td class="ta-r mono">{{ currency }}{{ s.cost|money }}</td></tr>
         {% endfor %}
         {% for r in bd.regions %}
-          {% if r.pane_structure %}<tr><td>{{ r.region_label }} — {{ r.pane_structure.label }}</td><td>{{ r.pane_structure.description }}</td><td class="ta-r mono">₹{{ r.pane_structure.cost|money }}</td></tr>{% endif %}
-          {% if r.infill %}<tr><td>{{ r.region_label }} — {{ r.infill.label }}</td><td>{{ r.infill.description }}</td><td class="ta-r mono">₹{{ r.infill.cost|money }}</td></tr>{% endif %}
-          {% if r.beading %}<tr><td>{{ r.region_label }} — {{ r.beading.label }}</td><td>{{ r.beading.description }}</td><td class="ta-r mono">₹{{ r.beading.cost|money }}</td></tr>{% endif %}
-          {% if r.grill %}<tr><td>{{ r.region_label }} — {{ r.grill.label }}</td><td>{{ r.grill.description }}</td><td class="ta-r mono">₹{{ r.grill.cost|money }}</td></tr>{% endif %}
-          {% for hw in r.hardware %}<tr><td>{{ r.region_label }} — {{ hw.label }}</td><td>{{ hw.description }}</td><td class="ta-r mono">₹{{ hw.cost|money }}</td></tr>{% endfor %}
+          {% if r.pane_structure %}<tr><td>{{ r.region_label }} — {{ r.pane_structure.label }}</td><td>{{ r.pane_structure.description }}</td><td class="ta-r mono">{{ currency }}{{ r.pane_structure.cost|money }}</td></tr>{% endif %}
+          {% if r.infill %}<tr><td>{{ r.region_label }} — {{ r.infill.label }}</td><td>{{ r.infill.description }}</td><td class="ta-r mono">{{ currency }}{{ r.infill.cost|money }}</td></tr>{% endif %}
+          {% if r.beading %}<tr><td>{{ r.region_label }} — {{ r.beading.label }}</td><td>{{ r.beading.description }}</td><td class="ta-r mono">{{ currency }}{{ r.beading.cost|money }}</td></tr>{% endif %}
+          {% if r.grill %}<tr><td>{{ r.region_label }} — {{ r.grill.label }}</td><td>{{ r.grill.description }}</td><td class="ta-r mono">{{ currency }}{{ r.grill.cost|money }}</td></tr>{% endif %}
+          {% for hw in r.hardware %}<tr><td>{{ r.region_label }} — {{ hw.label }}</td><td>{{ hw.description }}</td><td class="ta-r mono">{{ currency }}{{ hw.cost|money }}</td></tr>{% endfor %}
         {% endfor %}
-        <tr><td colspan="2" class="ta-r"><strong>Unit subtotal</strong></td><td class="ta-r mono"><strong>₹{{ f.unit_subtotal|money }}</strong></td></tr>
+        <tr><td colspan="2" class="ta-r"><strong>Unit subtotal</strong></td><td class="ta-r mono"><strong>{{ currency }}{{ f.unit_subtotal|money }}</strong></td></tr>
         {% if f.quantity > 1 %}
-        <tr><td colspan="2" class="ta-r">× {{ f.quantity }} units</td><td class="ta-r mono"><strong>₹{{ f.line_total|money }}</strong></td></tr>
+        <tr><td colspan="2" class="ta-r">× {{ f.quantity }} units</td><td class="ta-r mono"><strong>{{ currency }}{{ f.line_total|money }}</strong></td></tr>
         {% endif %}
       </tbody>
+    </table>
+    </td>
+    </tr>
     </table>
   </div>
   {% endfor %}
 
+  <!-- Bill of materials (consolidated across all frames × quantities) -->
+  {% if bom %}
+  <div class="frame-detail">
+    <div class="fname">Bill of Materials</div>
+    <table class="summary">
+      <thead>
+        <tr><th>Material</th><th class="ta-r">Quantity</th><th>Unit</th><th class="ta-r">Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for b in bom %}
+        <tr>
+          <td>{{ b.label }}</td>
+          <td class="ta-r mono">{{ "%g"|format(b.quantity) }}</td>
+          <td>{{ b.unit }}</td>
+          <td class="ta-r mono">{{ currency }}{{ b.cost|money }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
   <!-- Totals -->
   <table class="totals">
-    <tr class="row"><td>Subtotal</td><td class="ta-r mono">₹{{ estimate.subtotal|money }}</td></tr>
+    <tr class="row"><td>Subtotal</td><td class="ta-r mono">{{ currency }}{{ estimate.subtotal|money }}</td></tr>
     {% if estimate.discount_amount > 0 %}
     <tr class="row"><td>Discount{% if estimate.discount_type == 'PERCENTAGE' %} ({{ estimate.discount_value }}%){% endif %}</td>
-        <td class="ta-r mono">− ₹{{ estimate.discount_amount|money }}</td></tr>
+        <td class="ta-r mono">− {{ currency }}{{ estimate.discount_amount|money }}</td></tr>
     {% endif %}
-    <tr class="row"><td>Taxable Amount</td><td class="ta-r mono">₹{{ estimate.taxable|money }}</td></tr>
-    <tr class="row"><td>GST (18%)</td><td class="ta-r mono">₹{{ estimate.gst|money }}</td></tr>
-    <tr class="grand"><td>Grand Total</td><td class="ta-r mono">₹{{ "{:,}".format(estimate.grand_total) }}</td></tr>
-    <tr class="advance"><td>Advance ({{ estimate.advance_pct }}%)</td><td class="ta-r mono">₹{{ "{:,}".format(estimate.advance_amount) }}</td></tr>
+    <tr class="row"><td>Taxable Amount</td><td class="ta-r mono">{{ currency }}{{ estimate.taxable|money }}</td></tr>
+    <tr class="row"><td>GST ({{ estimate.gst_pct }}%)</td><td class="ta-r mono">{{ currency }}{{ estimate.gst|money }}</td></tr>
+    <tr class="grand"><td>Grand Total</td><td class="ta-r mono">{{ currency }}{{ "{:,}".format(estimate.grand_total) }}</td></tr>
+    <tr class="advance"><td>Advance ({{ estimate.advance_pct }}%)</td><td class="ta-r mono">{{ currency }}{{ "{:,}".format(estimate.advance_amount) }}</td></tr>
   </table>
 
   {% if estimate.notes %}
   <div class="notes"><strong>Notes:</strong> {{ estimate.notes }}</div>
   {% endif %}
 
+  {% if estimate.terms %}
+  <div class="notes"><strong>Terms &amp; Conditions:</strong> {{ estimate.terms }}</div>
+  {% endif %}
+
+  {% if company.bank_details %}
+  <div class="notes"><strong>Bank Details:</strong> {{ company.bank_details }}</div>
+  {% endif %}
+
   <div class="footer">
-    Generated by SteelCAD on {{ generated_at }} · This is a computer-generated estimate.
+    Generated by {{ company.name }} on {{ generated_at }} · This is a computer-generated quotation.
   </div>
 </body>
 </html>

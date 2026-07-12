@@ -5,7 +5,6 @@ Tests the core business logic against the examples in design_rules_spec.md.
 These tests run WITHOUT a database — the pricing engine is pure Python.
 """
 import uuid
-import pytest
 from app.services.pricing import price_design, _round2, _round_rupee, DEFAULT_RATES
 
 
@@ -449,6 +448,37 @@ def test_advance_percentage():
     assert result["advance_pct"] == 60.0
     # Grand total: 2549 → 60% = 1529.4 → ₹1529
     assert result["advance_amount"] == 1529
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test: Configurable GST percentage
+# ═══════════════════════════════════════════════════════════════════
+
+def test_gst_pct_12():
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+
+    result = price_design(tree, RATES, gst_pct=12)
+
+    assert result["subtotal"] == 2160.0
+    assert result["gst"] == 259.2                # 2160 × 0.12
+    assert result["grand_total"] == 2419         # round(2160 + 259.2)
+
+
+def test_gst_pct_defaults_to_18():
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+
+    assert price_design(tree, RATES)["gst"] == price_design(tree, RATES, gst_pct=18)["gst"]
+
+
+def test_gst_pct_zero():
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+
+    result = price_design(tree, RATES, gst_pct=0)
+    assert result["gst"] == 0.0
+    assert result["grand_total"] == 2160
 
 
 # ═══════════════════════════════════════════════════════════════════

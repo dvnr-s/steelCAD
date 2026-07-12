@@ -1,10 +1,19 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Plus, Trash2, Pencil, Download, X, LayoutGrid, SquarePen, AppWindow, DoorOpen } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Pencil, Download, X, LayoutGrid, SquarePen, AppWindow, DoorOpen, Lock, Copy } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { estimatesApi, designsApi } from '../api/client'
 import { makeEmptyTree } from '../store/editorStore'
 import TopNav from '../components/TopNav'
+import { useConfirm } from '../components/ConfirmModal'
+
+// Estimate lifecycle: only 'draft' is editable; the rest lock the estimate.
+// 'superseded' is terminal (set only by Revise) and can't be picked manually.
+const STATUS_OPTIONS = ['draft', 'sent', 'accepted', 'rejected']
+const STATUS_COLORS = {
+  draft: 'var(--c-text-muted)', sent: '#3b82f6', accepted: '#22c55e', rejected: '#ef4444',
+  superseded: '#a855f7',
+}
 
 const money = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const rupee = (n) => `₹${Number(n).toLocaleString('en-IN')}`
@@ -60,7 +69,7 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
       onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="card fade-in" style={{ width: 520, padding: 24, maxHeight: '86vh', display: 'flex', flexDirection: 'column' }}>
+      <div className="card fade-in modal-card" style={{ '--modal-w': '520px', padding: 24, display: 'flex', flexDirection: 'column' }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
           <h3>Add Frame</h3>
           <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>
@@ -151,12 +160,16 @@ export default function EstimateBuilderPage() {
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const [terms, setTerms] = useState({ title: '', notes: '', discount_type: '', discount_value: 0, advance_pct: 50 })
+  const [terms, setTerms] = useState({ title: '', notes: '', valid_until: '', terms: '', discount_type: '', discount_value: 0, advance_pct: 50 })
+  const { confirm, ConfirmDialog } = useConfirm()
+
+  const locked = !!est && est.status !== 'draft'
 
   const applyEstimate = (data) => {
     setEst(data)
     setTerms({
       title: data.title || '', notes: data.notes || '',
+      valid_until: data.valid_until || '', terms: data.terms || '',
       discount_type: data.discount_type || '', discount_value: data.discount_value || 0,
       advance_pct: data.advance_pct ?? 50,
     })
@@ -165,9 +178,53 @@ export default function EstimateBuilderPage() {
   useEffect(() => {
     estimatesApi.get(id)
       .then(({ data }) => applyEstimate(data))
-      .catch(() => { toast.error('Estimate not found'); navigate('/') })
+      .catch(() => { toast.error('Estimate not found'); navigate('/customers') })
       .finally(() => setLoading(false))
   }, [id])
+
+  const changeStatus = async (status) => {
+    try {
+      const { data } = await estimatesApi.setStatus(id, status)
+      applyEstimate(data)
+      toast.success(`Marked ${status}`)
+    } catch {
+      toast.error('Failed to update status')
+    }
+  }
+
+  const duplicateEstimate = async () => {
+    try {
+      const { data } = await estimatesApi.duplicate(id)
+      toast.success(`Duplicated as EST-${String(data.number).padStart(4, '0')}`)
+      navigate(`/estimates/${data.id}`)
+    } catch {
+      toast.error('Failed to duplicate estimate')
+    }
+  }
+
+  const reviseEstimate = async () => {
+    if (!await confirm(
+      'Create a new revision? This quote becomes superseded (kept for history) and a fresh editable draft with the same number takes its place.',
+      { title: 'Revise Quote', confirmLabel: 'Create Revision' },
+    )) return
+    try {
+      const { data } = await estimatesApi.revise(id)
+      toast.success(`Created EST-${String(data.number).padStart(4, '0')} rev ${data.revision}`)
+      navigate(`/estimates/${data.id}`)
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to revise estimate')
+    }
+  }
+
+  const duplicateFrame = async (frameId) => {
+    try {
+      const { data } = await estimatesApi.duplicateFrame(id, frameId)
+      applyEstimate(data)
+      toast.success('Frame duplicated')
+    } catch {
+      toast.error('Failed to duplicate frame')
+    }
+  }
 
   const saveTerms = async (patch) => {
     try {
@@ -219,7 +276,7 @@ export default function EstimateBuilderPage() {
   }
 
   const deleteFrame = async (frameId) => {
-    if (!confirm('Remove this frame from the estimate?')) return
+    if (!await confirm('Remove this frame from the estimate?', { title: 'Remove Frame', confirmLabel: 'Remove' })) return
     try {
       const { data } = await estimatesApi.deleteFrame(id, frameId)
       applyEstimate(data)
@@ -229,20 +286,35 @@ export default function EstimateBuilderPage() {
     }
   }
 
+  const saveBlob = (data, type, filename) => {
+    const url = URL.createObjectURL(new Blob([data], { type }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const fileStem = () => `EST-${String(est.number).padStart(4, '0')}${est.revision > 1 ? `_rev${est.revision}` : ''}`
+
   const downloadPdf = async () => {
     setDownloading(true)
     try {
       const { data } = await estimatesApi.downloadPdf(id)
-      const url = URL.createObjectURL(new Blob([data], { type: 'application/pdf' }))
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `SteelCAD_EST-${String(est.number).padStart(4, '0')}.pdf`
-      a.click()
-      URL.revokeObjectURL(url)
+      saveBlob(data, 'application/pdf', `SteelCAD_${fileStem()}.pdf`)
     } catch {
       toast.error('PDF download failed')
     } finally {
       setDownloading(false)
+    }
+  }
+
+  const downloadBom = async () => {
+    try {
+      const { data } = await estimatesApi.downloadBomCsv(id)
+      saveBlob(data, 'text/csv', `SteelCAD_BOM_${fileStem()}.csv`)
+    } catch {
+      toast.error('BOM download failed')
     }
   }
 
@@ -261,24 +333,90 @@ export default function EstimateBuilderPage() {
 
         <div className="flex items-center justify-between" style={{ marginBottom: 20 }}>
           <div>
-            <h1 style={{ marginBottom: 4 }}>Estimate EST-{String(est.number).padStart(4, '0')}</h1>
+            <h1 style={{ marginBottom: 4 }}>
+              Estimate EST-{String(est.number).padStart(4, '0')}
+              {est.revision > 1 && <span style={{ color: 'var(--c-text-muted)', fontWeight: 500 }}> rev {est.revision}</span>}
+            </h1>
             <p>For {est.customer.name}{est.customer.company ? ` · ${est.customer.company}` : ''}</p>
           </div>
-          <button className="btn btn-primary" onClick={downloadPdf} disabled={downloading || est.frames.length === 0}>
-            {downloading ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Download size={15} />} Download PDF
-          </button>
+          <div className="flex items-center gap-2">
+            <span className="badge" style={{
+              textTransform: 'capitalize', color: STATUS_COLORS[est.status],
+              border: `1px solid ${STATUS_COLORS[est.status]}`, background: 'transparent',
+            }}>{est.status}</span>
+            {est.is_expired && (
+              <span className="badge" title="This sent quote is past its valid-until date — consider revising it"
+                style={{ color: '#f97316', border: '1px solid #f97316', background: 'transparent' }}>
+                expired
+              </span>
+            )}
+            {est.status !== 'superseded' && (
+              <select value={est.status} onChange={(e) => changeStatus(e.target.value)} title="Change status"
+                style={{ width: 120, fontSize: '0.85rem', padding: '6px 8px' }}>
+                {STATUS_OPTIONS.map((s) => (
+                  <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>
+                ))}
+              </select>
+            )}
+            {locked && est.status !== 'superseded' && (
+              <button className="btn btn-secondary" onClick={reviseEstimate}
+                title="Create rev N+1 as a fresh draft; this quote becomes superseded">
+                <Pencil size={15} /> Revise
+              </button>
+            )}
+            <button className="btn btn-secondary" onClick={duplicateEstimate} title="Duplicate this estimate as a new draft with a new number">
+              <Copy size={15} /> Duplicate
+            </button>
+            <button className="btn btn-secondary" onClick={downloadBom} disabled={est.frames.length === 0}
+              title="Consolidated bill of materials as a spreadsheet">
+              <Download size={15} /> BOM CSV
+            </button>
+            <button className="btn btn-primary" onClick={downloadPdf} disabled={downloading || est.frames.length === 0}>
+              {downloading ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Download size={15} />} Download PDF
+            </button>
+          </div>
         </div>
 
-        {/* Title + notes */}
+        {est.status === 'superseded' ? (
+          <div className="card" style={{ padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8,
+            borderLeft: `3px solid ${STATUS_COLORS.superseded}`, color: 'var(--c-text-muted)' }}>
+            <Lock size={15} />
+            <span>This revision was <strong>superseded</strong> by a newer one — it is kept read-only for history.
+              Find the latest revision in the customer's estimate list.</span>
+          </div>
+        ) : locked && (
+          <div className="card" style={{ padding: '10px 14px', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8,
+            borderLeft: `3px solid ${STATUS_COLORS[est.status]}`, color: 'var(--c-text-muted)' }}>
+            <Lock size={15} />
+            <span>This estimate is <strong style={{ textTransform: 'capitalize' }}>{est.status}</strong> and locked.
+              {est.is_expired && <> It expired on <strong>{est.valid_until}</strong> — consider revising it with fresh validity.</>}{' '}
+              Use <strong>Revise</strong> to change what was quoted (keeps this version for history), or set status
+              back to <strong>Draft</strong> only if it was sent by mistake.</span>
+          </div>
+        )}
+
+        {/* Title + notes + quote details */}
         <div className="card" style={{ padding: 16, marginBottom: 20 }}>
           <div className="flex gap-3">
             <div className="form-group" style={{ flex: 1 }}>
               <label>Project title</label>
-              <input value={terms.title} onChange={(e) => setTerms((t) => ({ ...t, title: e.target.value }))} onBlur={() => saveTerms({ title: terms.title })} placeholder="e.g. Ground floor windows" />
+              <input value={terms.title} disabled={locked} onChange={(e) => setTerms((t) => ({ ...t, title: e.target.value }))} onBlur={() => saveTerms({ title: terms.title })} placeholder="e.g. Ground floor windows" />
             </div>
             <div className="form-group" style={{ flex: 2 }}>
               <label>Notes</label>
-              <input value={terms.notes} onChange={(e) => setTerms((t) => ({ ...t, notes: e.target.value }))} onBlur={() => saveTerms({ notes: terms.notes })} placeholder="Terms, delivery, etc." />
+              <input value={terms.notes} disabled={locked} onChange={(e) => setTerms((t) => ({ ...t, notes: e.target.value }))} onBlur={() => saveTerms({ notes: terms.notes })} placeholder="Internal notes" />
+            </div>
+          </div>
+          <div className="flex gap-3" style={{ marginTop: 12 }}>
+            <div className="form-group" style={{ width: 200 }}>
+              <label>Valid until</label>
+              <input type="date" value={terms.valid_until || ''} disabled={locked}
+                onChange={(e) => setTerms((t) => ({ ...t, valid_until: e.target.value }))}
+                onBlur={() => saveTerms({ valid_until: terms.valid_until || null })} />
+            </div>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>Terms &amp; conditions (shown on the PDF)</label>
+              <input value={terms.terms} disabled={locked} onChange={(e) => setTerms((t) => ({ ...t, terms: e.target.value }))} onBlur={() => saveTerms({ terms: terms.terms })} placeholder="Payment terms, delivery, warranty…" />
             </div>
           </div>
         </div>
@@ -286,7 +424,7 @@ export default function EstimateBuilderPage() {
         {/* Frames */}
         <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
           <h2>Frames</h2>
-          <button className="btn btn-secondary btn-sm" onClick={() => setShowAdd(true)}><Plus size={15} /> Add Frame</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setShowAdd(true)} disabled={locked}><Plus size={15} /> Add Frame</button>
         </div>
 
         <div className="card" style={{ padding: 0, overflow: 'hidden', marginBottom: 24 }}>
@@ -307,6 +445,7 @@ export default function EstimateBuilderPage() {
                     <input
                       key={f.name}
                       defaultValue={f.name}
+                      disabled={locked}
                       title="Click to rename"
                       onFocus={(e) => { e.target.style.borderColor = 'var(--c-border)' }}
                       onBlur={(e) => {
@@ -319,13 +458,13 @@ export default function EstimateBuilderPage() {
                   <td style={{ padding: '10px 16px', color: 'var(--c-text-muted)', fontFamily: 'var(--font-mono)' }}>{f.outer_width}ft × {f.outer_height}ft</td>
                   <td style={{ padding: '6px 16px', color: 'var(--c-text-muted)' }}>
                     <div className="flex gap-1" style={{ alignItems: 'center' }}>
-                      <select value={f.section_size} onChange={(e) => setFrameSpec(f, { sectionSize: e.target.value })} title="Section size"
+                      <select value={f.section_size} disabled={locked} onChange={(e) => setFrameSpec(f, { sectionSize: e.target.value })} title="Section size"
                         style={{ fontSize: '0.8rem', padding: '2px 4px', width: 58 }}>
                         <option value="5">5"</option>
                         <option value="6">6"</option>
                         <option value="10">10"</option>
                       </select>
-                      <select value={f.gauge} onChange={(e) => setFrameSpec(f, { gauge: e.target.value })} title="Gauge"
+                      <select value={f.gauge} disabled={locked} onChange={(e) => setFrameSpec(f, { gauge: e.target.value })} title="Gauge"
                         style={{ fontSize: '0.8rem', padding: '2px 4px', width: 64 }}>
                         <option value="18G">18G</option>
                         <option value="16G">16G</option>
@@ -333,14 +472,15 @@ export default function EstimateBuilderPage() {
                     </div>
                   </td>
                   <td style={{ padding: '6px 16px', textAlign: 'right' }}>
-                    <input type="number" min="1" defaultValue={f.quantity} onBlur={(e) => setFrameQty(f.id, e.target.value)}
+                    <input type="number" min="1" defaultValue={f.quantity} disabled={locked} onBlur={(e) => setFrameQty(f.id, e.target.value)}
                       style={{ width: 60, textAlign: 'right', fontFamily: 'var(--font-mono)' }} />
                   </td>
                   <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{money(f.unit_subtotal)}</td>
                   <td style={{ padding: '10px 16px', textAlign: 'right', fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{money(f.line_total)}</td>
                   <td style={{ padding: '6px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                    <button className="btn btn-ghost btn-sm btn-icon" title="Edit design" onClick={() => navigate(`/estimates/${id}/frames/${f.id}`)}><Pencil size={14} /></button>
-                    <button className="btn btn-ghost btn-sm btn-icon" style={{ color: 'var(--c-error)' }} title="Remove" onClick={() => deleteFrame(f.id)}><Trash2 size={14} /></button>
+                    <button className="btn btn-ghost btn-sm btn-icon" title={locked ? 'View design' : 'Edit design'} onClick={() => navigate(`/estimates/${id}/frames/${f.id}`)}><Pencil size={14} /></button>
+                    <button className="btn btn-ghost btn-sm btn-icon" title="Duplicate frame" disabled={locked} onClick={() => duplicateFrame(f.id)}><Copy size={14} /></button>
+                    <button className="btn btn-ghost btn-sm btn-icon" style={{ color: 'var(--c-error)' }} title="Remove" disabled={locked} onClick={() => deleteFrame(f.id)}><Trash2 size={14} /></button>
                   </td>
                 </tr>
               ))}
@@ -355,12 +495,12 @@ export default function EstimateBuilderPage() {
             <div className="form-group" style={{ marginBottom: 10 }}>
               <label>Discount</label>
               <div className="flex gap-2">
-                <select value={terms.discount_type} onChange={(e) => { const v = e.target.value; setTerms((t) => ({ ...t, discount_type: v })); saveTerms({ discount_type: v, discount_value: terms.discount_value }) }} style={{ flex: 1 }}>
+                <select value={terms.discount_type} disabled={locked} onChange={(e) => { const v = e.target.value; setTerms((t) => ({ ...t, discount_type: v })); saveTerms({ discount_type: v, discount_value: terms.discount_value }) }} style={{ flex: 1 }}>
                   <option value="">None</option>
                   <option value="PERCENTAGE">Percentage (%)</option>
                   <option value="FLAT">Flat (₹)</option>
                 </select>
-                <input type="number" min="0" value={terms.discount_value} disabled={!terms.discount_type}
+                <input type="number" min="0" value={terms.discount_value} disabled={locked || !terms.discount_type}
                   onChange={(e) => setTerms((t) => ({ ...t, discount_value: e.target.value }))}
                   onBlur={() => saveTerms({ discount_value: Number(terms.discount_value) || 0 })}
                   style={{ width: 110, textAlign: 'right' }} />
@@ -368,7 +508,7 @@ export default function EstimateBuilderPage() {
             </div>
             <div className="form-group">
               <label>Advance %</label>
-              <input type="number" min="0" max="100" value={terms.advance_pct}
+              <input type="number" min="0" max="100" value={terms.advance_pct} disabled={locked}
                 onChange={(e) => setTerms((t) => ({ ...t, advance_pct: e.target.value }))}
                 onBlur={() => saveTerms({ advance_pct: Number(terms.advance_pct) || 0 })}
                 style={{ width: 110, textAlign: 'right' }} />
@@ -380,7 +520,7 @@ export default function EstimateBuilderPage() {
               ['Subtotal', money(est.subtotal)],
               est.discount_amount > 0 && [`Discount${est.discount_type === 'PERCENTAGE' ? ` (${est.discount_value}%)` : ''}`, `− ${money(est.discount_amount)}`],
               ['Taxable Amount', money(est.taxable)],
-              ['GST (18%)', money(est.gst)],
+              [`GST (${est.gst_pct ?? 18}%)`, money(est.gst)],
             ].filter(Boolean).map(([label, value]) => (
               <div key={label} className="flex justify-between" style={{ padding: '10px 20px', borderBottom: '1px solid var(--c-border)' }}>
                 <span style={{ fontWeight: 500 }}>{label}</span>
@@ -402,6 +542,7 @@ export default function EstimateBuilderPage() {
       {showAdd && (
         <AddFrameModal estimateId={id} onClose={() => setShowAdd(false)} onAdded={(data) => { applyEstimate(data); setShowAdd(false) }} />
       )}
+      {ConfirmDialog}
     </div>
   )
 }

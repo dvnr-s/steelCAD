@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { LogIn } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
@@ -77,9 +77,8 @@ export default function LoginPage() {
         </form>
 
         <div className="divider" style={{ margin: '24px 0' }} />
-        <p className="text-sm" style={{ textAlign: 'center' }}>
-          Don't have an account?{' '}
-          <Link to="/register">Create one</Link>
+        <p className="text-sm" style={{ textAlign: 'center', color: 'var(--c-text-muted)' }}>
+          Access is by invitation only. Contact your admin to get an account.
         </p>
       </div>
     </div>
