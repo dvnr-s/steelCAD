@@ -200,7 +200,10 @@
 
   <!-- Totals -->
   <table class="totals">
-    <tr class="row"><td>Subtotal</td><td class="ta-r mono">{{ currency }}{{ estimate.subtotal|money }}</td></tr>
+    <tr class="row"><td>Subtotal{% if estimate.other_charges %} (frames){% endif %}</td><td class="ta-r mono">{{ currency }}{{ estimate.subtotal|money }}</td></tr>
+    {% for c in estimate.other_charges %}
+    <tr class="row"><td>{{ c.label }}</td><td class="ta-r mono">{{ currency }}{{ c.amount|money }}</td></tr>
+    {% endfor %}
     {% if estimate.discount_amount > 0 %}
     <tr class="row"><td>Discount{% if estimate.discount_type == 'PERCENTAGE' %} ({{ estimate.discount_value }}%){% endif %}</td>
         <td class="ta-r mono">− {{ currency }}{{ estimate.discount_amount|money }}</td></tr>

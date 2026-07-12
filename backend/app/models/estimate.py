@@ -59,6 +59,10 @@ class Estimate(Base):
     # GST % snapshot taken from company settings at creation — a settings change
     # never silently reprices an existing estimate (same idea as rate_snapshot).
     gst_pct: Mapped[float] = mapped_column(Numeric(5, 2), default=18)
+    # PR-9: manual line items ({label, amount}) for costs the geometry cannot
+    # derive — labor, transport, installation. Added to the frames subtotal
+    # before discount; never part of a frame's unit breakdown or the BOM.
+    other_charges: Mapped[list] = mapped_column(JSONB, default=list)
 
     # Snapshot of rates used at last recompute (reproducibility)
     rate_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)

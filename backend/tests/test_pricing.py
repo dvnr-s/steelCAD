@@ -797,3 +797,82 @@ def test_window_and_door_frames_match_for_same_layout():
 
     assert window["frame"]["quantity"] == door["frame"]["quantity"] == 20.0
     assert window["subtotal"] == door["subtotal"]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test: Other charges (PR-9 — labor / transport / installation)
+# ═══════════════════════════════════════════════════════════════════
+
+from app.services.pricing import _apply_commercial_terms, price_estimate, sum_other_charges
+
+
+def test_other_charges_spec_example():
+    """Spec §9.4 worked example: frames ₹10,000 + transport ₹1,500 +
+    installation ₹2,000, 10% discount, GST 18%, advance 50%."""
+    terms = _apply_commercial_terms(
+        10000.0, "PERCENTAGE", 10, 50, gst_pct=18,
+        other_charges=[
+            {"label": "Transport", "amount": 1500},
+            {"label": "Installation", "amount": 2000},
+        ],
+    )
+
+    assert terms["other_charges_total"] == 3500.0
+    assert terms["discount_amount"] == 1350.0   # 10% of 13,500 gross
+    assert terms["taxable"] == 12150.0
+    assert terms["gst"] == 2187.0
+    assert terms["grand_total"] == 14337
+    assert terms["advance_amount"] == 7169      # 7168.50 → HALF_UP
+
+
+def test_price_estimate_with_other_charges():
+    """Charges join the aggregate after the frames subtotal; the frames
+    subtotal itself stays materials-only."""
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+
+    result = price_estimate(
+        [{"name": "W1", "quantity": 1, "tree": tree}],
+        RATES,
+        other_charges=[{"label": "Transport", "amount": 500}],
+    )
+
+    assert result["subtotal"] == 2160.0                  # frames only
+    assert result["other_charges_total"] == 500.0
+    assert result["other_charges"] == [{"label": "Transport", "amount": 500}]
+    assert result["taxable"] == 2660.0                   # gross, no discount
+    assert result["gst"] == 478.8                        # 2660 × 0.18
+    assert result["grand_total"] == 3139                 # round(3138.8)
+
+
+def test_other_charges_absent_is_neutral():
+    """No charges (None or []) must leave every total exactly as before."""
+    root = _leaf_region(5.0, 4.0, "fixed")
+    tree = _design_tree(5.0, 4.0, root, "5", "18G")
+    frames = [{"name": "W1", "quantity": 2, "tree": tree}]
+
+    base = price_estimate(frames, RATES)
+    empty = price_estimate(frames, RATES, other_charges=[])
+
+    assert base["other_charges_total"] == 0.0
+    for key in ("subtotal", "discount_amount", "taxable", "gst", "grand_total", "advance_amount"):
+        assert base[key] == empty[key]
+
+
+def test_flat_discount_caps_at_gross_including_charges():
+    """A FLAT discount larger than frames+charges is capped at the gross."""
+    terms = _apply_commercial_terms(
+        100.0, "FLAT", 500, 50,
+        other_charges=[{"label": "Labor", "amount": 50}],
+    )
+
+    assert terms["discount_amount"] == 150.0   # capped at 100 + 50
+    assert terms["taxable"] == 0.0
+    assert terms["grand_total"] == 0
+
+
+def test_sum_other_charges_tolerates_missing_amounts():
+    assert sum_other_charges(None) == 0.0
+    assert sum_other_charges([]) == 0.0
+    assert sum_other_charges([{"label": "x"}, {"label": "y", "amount": None}]) == 0.0
+    assert sum_other_charges([{"label": "a", "amount": 10.555}, {"amount": 4}]) == 14.56

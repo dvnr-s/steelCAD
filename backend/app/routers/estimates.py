@@ -34,7 +34,7 @@ from app.services.auth import get_current_user, require_role
 from app.services.access import assert_can_write, assert_editable
 from app.services.ratelimit import limiter
 from app.services.audit import record_audit
-from app.services.pricing import price_design, _apply_commercial_terms, _round2
+from app.services.pricing import price_design, _apply_commercial_terms, _round2, sum_other_charges
 from app.services.validation import validate_design_tree, validate_tree_bounds
 from app.services.bom import build_bom
 from app.services.pdf import generate_estimate_pdf
@@ -80,6 +80,7 @@ async def _recompute(estimate: Estimate, db: AsyncSession) -> None:
         # The estimate's FROZEN snapshot — a company GST change must never
         # silently reprice an existing estimate through a recompute.
         gst_pct=float(estimate.gst_pct if estimate.gst_pct is not None else 18),
+        other_charges=estimate.other_charges or [],
     )
     estimate.rate_snapshot = snapshot
     estimate.subtotal = subtotal
@@ -121,6 +122,8 @@ def _detail(estimate: Estimate) -> EstimateDetail:
         is_expired=_is_expired(estimate),
         frames=[FrameDetail.model_validate(f) for f in estimate.frames],
         subtotal=float(estimate.subtotal or 0),
+        other_charges=estimate.other_charges or [],
+        other_charges_total=sum_other_charges(estimate.other_charges),
         discount_amount=float(estimate.discount_amount or 0),
         taxable=float(estimate.taxable or 0),
         gst=float(estimate.gst or 0),
@@ -231,6 +234,7 @@ def _copy_estimate(
         discount_value=source.discount_value,
         advance_pct=source.advance_pct,
         gst_pct=gst_pct,
+        other_charges=list(source.other_charges or []),
         revision=revision,
         parent_id=parent_id,
         created_by=user.id,
@@ -309,6 +313,7 @@ async def create_estimate(
         # so later settings changes never reprice this estimate.
         advance_pct=data.advance_pct if data.advance_pct is not None else float(company.default_advance_pct),
         gst_pct=float(company.gst_pct),
+        other_charges=[c.model_dump() for c in data.other_charges],
         created_by=user.id,
     )
     estimate.customer = customer  # populate relationship to avoid an async lazy-load

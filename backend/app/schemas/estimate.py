@@ -88,6 +88,13 @@ class FrameDetail(BaseModel):
 
 # ─── Estimates ──────────────────────────────────────────────────────
 
+class OtherCharge(BaseModel):
+    """PR-9: a manual estimate-level line item the geometry cannot derive —
+    labor/fabrication, transport, installation, and similar."""
+    label: str = Field(min_length=1, max_length=80)
+    amount: float = Field(ge=0)
+
+
 class EstimateCreate(BaseModel):
     title: Optional[str] = None
     notes: Optional[str] = None
@@ -97,6 +104,7 @@ class EstimateCreate(BaseModel):
     discount_value: float = Field(default=0, ge=0)
     # None → the company's default_advance_pct applies.
     advance_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    other_charges: list[OtherCharge] = Field(default_factory=list, max_length=20)
 
 
 class EstimateUpdate(BaseModel):
@@ -108,6 +116,7 @@ class EstimateUpdate(BaseModel):
     discount_type: Optional[Literal["PERCENTAGE", "FLAT"]] = None
     discount_value: Optional[float] = Field(default=None, ge=0)
     advance_pct: Optional[float] = Field(default=None, ge=0, le=100)
+    other_charges: Optional[list[OtherCharge]] = Field(default=None, max_length=20)
 
 
 class EstimateStatusUpdate(BaseModel):
@@ -146,6 +155,8 @@ class EstimateDetail(BaseModel):
     is_expired: bool = False
     frames: list[FrameDetail]
     subtotal: float
+    other_charges: list[OtherCharge] = Field(default_factory=list)
+    other_charges_total: float = 0
     discount_amount: float
     taxable: float
     gst: float

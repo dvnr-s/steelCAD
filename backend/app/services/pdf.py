@@ -62,6 +62,12 @@ def render_estimate_html(estimate, company=None) -> str:
             "discount_value": float(estimate.discount_value or 0),
             "discount_amount": float(estimate.discount_amount or 0),
             "subtotal": float(estimate.subtotal or 0),
+            # PR-9 manual charges (labor/transport/installation), shown between
+            # the frames subtotal and the discount row.
+            "other_charges": [
+                {"label": c.get("label", ""), "amount": float(c.get("amount", 0) or 0)}
+                for c in (getattr(estimate, "other_charges", None) or [])
+            ],
             "taxable": float(estimate.taxable or 0),
             "gst": float(estimate.gst or 0),
             "gst_pct": f"{float(getattr(estimate, 'gst_pct', None) or 18):g}",

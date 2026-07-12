@@ -42,10 +42,13 @@ estimate-level commercial terms once to the aggregate.
           +  Σ per-region (pane + infill + beading + hardware + grill)
 
  taxable      = subtotal − discount
- gst          = taxable × 18%
+ gst          = taxable × gst_pct          # default 18%, snapshot per estimate
  grand_total  = round_to_rupee(taxable + gst)
  advance      = round_to_rupee(grand_total × advance_pct / 100)
 ```
+
+At the **estimate** level, manual *other charges* (PR-9 — labor, transport,
+installation) join the frames subtotal before the discount; see §6.
 
 ---
 
@@ -171,14 +174,21 @@ Grill is read from the region it's attached to (leaf, or branch for SS continuit
 ```
 subtotal = frame_cost + Σ split_costs + Σ region_subtotals      # PR-1/PR-2: 2 dp
 
+# Estimate level only (price_estimate / _apply_commercial_terms):
+gross    = subtotal + Σ other_charges.amount                    # PR-9: labor/transport/…
+
 discount:
-   PERCENTAGE → subtotal × value/100
-   FLAT       → min(value, subtotal)
-taxable      = subtotal − discount
-gst          = taxable × 0.18                                   # PR-4: 18%
+   PERCENTAGE → gross × value/100
+   FLAT       → min(value, gross)
+taxable      = gross − discount
+gst          = taxable × gst_pct/100                            # PR-4: default 18%
 grand_total  = round_to_nearest_rupee(taxable + gst)            # PR-3
 advance      = round_to_nearest_rupee(grand_total × advance_pct/100)   # PR-8: default 50%
 ```
+
+Other charges (`estimates.other_charges`, JSONB `[{label, amount}]`) are manual
+line items the geometry cannot derive. They are estimate-level only: never part
+of a frame's unit breakdown, the `/price` preview, or the BOM.
 
 Rounding helpers (all `ROUND_HALF_UP`):
 - `_round2` — 2 decimal places for all intermediate money.

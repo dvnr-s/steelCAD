@@ -348,6 +348,81 @@ class TestEstimateLifecycle:
         assert body["grand_total"] > 0           # re-priced
 
 
+# ── Other charges (PR-9 — labor / transport / installation) ───────
+
+class TestOtherCharges:
+    async def _estimate_with_frame(self, client, headers, db_session):
+        await seed_rates(db_session)
+        cust = (await client.post("/customers", headers=headers, json={"name": "Charges Co"})).json()["id"]
+        design_id = (await client.post("/designs", headers=headers,
+                                       json=make_design_payload("Charges Win"))).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=headers, json={"title": "Q"})).json()
+        r = await client.post(f"/estimates/{est['id']}/frames", headers=headers,
+                              json={"source_design_id": design_id, "quantity": 1})
+        return r.json()
+
+    async def test_put_charges_recomputes_totals(self, client, db_session):
+        await create_user(db_session, "charges@test.com", role="sales")
+        h = auth_headers(await login(client, "charges@test.com"))
+        est = await self._estimate_with_frame(client, h, db_session)
+        assert est["other_charges"] == [] and est["other_charges_total"] == 0
+
+        r = await client.put(f"/estimates/{est['id']}", headers=h, json={
+            "other_charges": [
+                {"label": "Transport", "amount": 1500},
+                {"label": "Installation", "amount": 2000},
+            ],
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["other_charges_total"] == 3500.0
+        assert [c["label"] for c in body["other_charges"]] == ["Transport", "Installation"]
+        # Charges join the aggregate before discount/GST: taxable = frames + charges.
+        assert body["taxable"] == round(body["subtotal"] + 3500.0, 2)
+        assert body["grand_total"] > est["grand_total"]
+
+        # Clearing the charges restores the original totals.
+        r = await client.put(f"/estimates/{est['id']}", headers=h, json={"other_charges": []})
+        assert r.json()["grand_total"] == est["grand_total"]
+
+    async def test_charges_locked_with_estimate(self, client, db_session):
+        await create_user(db_session, "charges_lock@test.com", role="sales")
+        h = auth_headers(await login(client, "charges_lock@test.com"))
+        est = await self._estimate_with_frame(client, h, db_session)
+        await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "sent"})
+
+        r = await client.put(f"/estimates/{est['id']}", headers=h,
+                             json={"other_charges": [{"label": "Labor", "amount": 100}]})
+        assert r.status_code == 409
+
+    async def test_invalid_charges_rejected(self, client, db_session):
+        await create_user(db_session, "charges_bad@test.com", role="sales")
+        h = auth_headers(await login(client, "charges_bad@test.com"))
+        est = await self._estimate_with_frame(client, h, db_session)
+
+        # Negative amount and empty label are both schema violations.
+        for bad in ({"label": "Labor", "amount": -5}, {"label": "", "amount": 10}):
+            r = await client.put(f"/estimates/{est['id']}", headers=h, json={"other_charges": [bad]})
+            assert r.status_code == 422
+
+    async def test_charges_carry_into_revision_and_pdf(self, client, db_session):
+        await create_user(db_session, "charges_rev@test.com", role="sales")
+        h = auth_headers(await login(client, "charges_rev@test.com"))
+        est = await self._estimate_with_frame(client, h, db_session)
+        await client.put(f"/estimates/{est['id']}", headers=h,
+                         json={"other_charges": [{"label": "Transport", "amount": 750}]})
+
+        # The PDF renders with charge rows present (template must not error).
+        pdf = await client.get(f"/estimates/{est['id']}/pdf", headers=h)
+        assert pdf.status_code == 200 and pdf.content[:4] == b"%PDF"
+
+        # Revise: the new revision keeps the charges and reprices identically.
+        await client.patch(f"/estimates/{est['id']}/status", headers=h, json={"status": "sent"})
+        rev = (await client.post(f"/estimates/{est['id']}/revise", headers=h)).json()
+        assert rev["other_charges"] == [{"label": "Transport", "amount": 750}]
+        assert rev["other_charges_total"] == 750.0
+
+
 # ── Quote revisions ────────────────────────────────────────────────
 
 class TestRevisions:

@@ -584,25 +584,40 @@ def price_design(
 
 # ─── Estimate aggregation (multi-frame) ───────────────────────────
 
+def sum_other_charges(other_charges: Optional[list]) -> float:
+    """Total of the PR-9 manual charge line items ({label, amount} dicts)."""
+    return _round2(sum(
+        float(c.get("amount", 0) or 0) for c in (other_charges or [])
+    ))
+
+
 def _apply_commercial_terms(
     subtotal: float,
     discount_type: Optional[str],
     discount_value: float,
     advance_pct: float,
     gst_pct: float = 18.0,
+    other_charges: Optional[list] = None,
 ) -> dict:
-    """Apply discount → GST → grand total → advance to a subtotal."""
+    """Apply other charges (PR-9) → discount → GST → grand total → advance.
+
+    Charges join the subtotal before discount, so discount and GST apply to
+    the combined amount (composite supply)."""
+    other_charges_total = sum_other_charges(other_charges)
+    gross = _round2(subtotal + other_charges_total)
+
     discount_amount = 0.0
     if discount_type == "PERCENTAGE" and discount_value > 0:
-        discount_amount = _round2(subtotal * discount_value / 100)
+        discount_amount = _round2(gross * discount_value / 100)
     elif discount_type == "FLAT" and discount_value > 0:
-        discount_amount = _round2(min(discount_value, subtotal))
+        discount_amount = _round2(min(discount_value, gross))
 
-    taxable = _round2(subtotal - discount_amount)
+    taxable = _round2(gross - discount_amount)
     gst = _round2(taxable * gst_pct / 100)
     grand_total = _round_rupee(taxable + gst)
     advance_amount = _round_rupee(grand_total * advance_pct / 100)
     return {
+        "other_charges_total": other_charges_total,
         "discount_amount": discount_amount,
         "taxable": taxable,
         "gst": gst,
@@ -618,17 +633,20 @@ def price_estimate(
     discount_value: float = 0,
     advance_pct: float = 50,
     gst_pct: float = 18.0,
+    other_charges: Optional[list] = None,
 ) -> dict:
     """
     Price a multi-frame estimate.
 
     Each frame is priced as a single unit (its own full breakdown, with no
     per-frame discount/GST), then multiplied by its quantity. Estimate-level
-    discount, GST, and advance are applied once to the aggregate.
+    other charges (PR-9), discount, GST, and advance are applied once to the
+    aggregate.
 
     Args:
         frames: list of {name, quantity, tree} dicts.
         rates: item_code → rate.
+        other_charges: optional list of {label, amount} manual line items.
     """
     frame_lines = []
     subtotal = 0.0
@@ -650,11 +668,15 @@ def price_estimate(
         })
 
     subtotal = _round2(subtotal)
-    terms = _apply_commercial_terms(subtotal, discount_type, discount_value, advance_pct, gst_pct)
+    terms = _apply_commercial_terms(
+        subtotal, discount_type, discount_value, advance_pct, gst_pct,
+        other_charges=other_charges,
+    )
 
     return {
         "frames": frame_lines,
         "subtotal": subtotal,
+        "other_charges": list(other_charges or []),
         "discount_type": discount_type,
         "discount_value": _round2(discount_value),
         "advance_pct": _round2(advance_pct),

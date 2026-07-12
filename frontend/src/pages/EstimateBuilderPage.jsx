@@ -160,7 +160,7 @@ export default function EstimateBuilderPage() {
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const [terms, setTerms] = useState({ title: '', notes: '', valid_until: '', terms: '', discount_type: '', discount_value: 0, advance_pct: 50 })
+  const [terms, setTerms] = useState({ title: '', notes: '', valid_until: '', terms: '', discount_type: '', discount_value: 0, advance_pct: 50, other_charges: [] })
   const { confirm, ConfirmDialog } = useConfirm()
 
   const locked = !!est && est.status !== 'draft'
@@ -172,6 +172,7 @@ export default function EstimateBuilderPage() {
       valid_until: data.valid_until || '', terms: data.terms || '',
       discount_type: data.discount_type || '', discount_value: data.discount_value || 0,
       advance_pct: data.advance_pct ?? 50,
+      other_charges: data.other_charges || [],
     })
   }
 
@@ -235,6 +236,27 @@ export default function EstimateBuilderPage() {
     } catch {
       toast.error('Failed to update estimate')
     }
+  }
+
+  // PR-9 other charges: rows without a label stay local-only (the backend
+  // rejects empty labels), so a half-typed row survives the blur-save cycle.
+  const setCharge = (i, patch) => setTerms((t) => ({
+    ...t,
+    other_charges: t.other_charges.map((c, j) => (j === i ? { ...c, ...patch } : c)),
+  }))
+
+  const saveCharges = (rows) => {
+    const valid = rows
+      .filter((c) => (c.label || '').trim())
+      .map((c) => ({ label: c.label.trim(), amount: Math.max(0, Number(c.amount) || 0) }))
+    if (JSON.stringify(valid) === JSON.stringify(est.other_charges || [])) return
+    saveTerms({ other_charges: valid })
+  }
+
+  const removeCharge = (i) => {
+    const rows = terms.other_charges.filter((_, j) => j !== i)
+    setTerms((t) => ({ ...t, other_charges: rows }))
+    saveCharges(rows)
   }
 
   const setFrameQty = async (frameId, qty) => {
@@ -506,23 +528,50 @@ export default function EstimateBuilderPage() {
                   style={{ width: 110, textAlign: 'right' }} />
               </div>
             </div>
-            <div className="form-group">
+            <div className="form-group" style={{ marginBottom: 10 }}>
               <label>Advance %</label>
               <input type="number" min="0" max="100" value={terms.advance_pct} disabled={locked}
                 onChange={(e) => setTerms((t) => ({ ...t, advance_pct: e.target.value }))}
                 onBlur={() => saveTerms({ advance_pct: Number(terms.advance_pct) || 0 })}
                 style={{ width: 110, textAlign: 'right' }} />
             </div>
+            <div className="form-group">
+              <label>Other Charges (labor, transport, installation…)</label>
+              {terms.other_charges.map((c, i) => (
+                <div key={i} className="flex gap-2" style={{ marginBottom: 6 }}>
+                  <input value={c.label} disabled={locked} placeholder="e.g. Transport"
+                    onChange={(e) => setCharge(i, { label: e.target.value })}
+                    onBlur={() => saveCharges(terms.other_charges)}
+                    style={{ flex: 1 }} />
+                  <input type="number" min="0" value={c.amount} disabled={locked}
+                    onChange={(e) => setCharge(i, { amount: e.target.value })}
+                    onBlur={() => saveCharges(terms.other_charges)}
+                    style={{ width: 110, textAlign: 'right' }} />
+                  {!locked && (
+                    <button className="btn btn-ghost btn-icon" title="Remove charge" onClick={() => removeCharge(i)}>
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+              {!locked && (
+                <button className="btn btn-ghost btn-sm"
+                  onClick={() => setTerms((t) => ({ ...t, other_charges: [...t.other_charges, { label: '', amount: 0 }] }))}>
+                  <Plus size={14} /> Add charge
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="estimate-totals" style={{ flex: 1, minWidth: 300 }}>
             {[
-              ['Subtotal', money(est.subtotal)],
+              [(est.other_charges || []).length ? 'Subtotal (frames)' : 'Subtotal', money(est.subtotal)],
+              ...(est.other_charges || []).map((c) => [c.label, money(c.amount)]),
               est.discount_amount > 0 && [`Discount${est.discount_type === 'PERCENTAGE' ? ` (${est.discount_value}%)` : ''}`, `− ${money(est.discount_amount)}`],
               ['Taxable Amount', money(est.taxable)],
               [`GST (${est.gst_pct ?? 18}%)`, money(est.gst)],
-            ].filter(Boolean).map(([label, value]) => (
-              <div key={label} className="flex justify-between" style={{ padding: '10px 20px', borderBottom: '1px solid var(--c-border)' }}>
+            ].filter(Boolean).map(([label, value], i) => (
+              <div key={`${label}-${i}`} className="flex justify-between" style={{ padding: '10px 20px', borderBottom: '1px solid var(--c-border)' }}>
                 <span style={{ fontWeight: 500 }}>{label}</span>
                 <span className="font-mono">{value}</span>
               </div>

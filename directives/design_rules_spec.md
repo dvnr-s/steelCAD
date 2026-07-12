@@ -689,11 +689,40 @@ Rates are resolved from a `RateConfig` table using a deterministic item code:
 - **PR-1**: All internal values kept to 2 decimal places.
 - **PR-2**: Per-item costs rounded to 2 decimals.
 - **PR-3**: Grand total rounded to nearest rupee (integer).
-- **PR-4**: GST = 18% on post-discount amount.
+- **PR-4**: GST is applied on the post-discount amount. Default 18%; the percentage
+  is configurable in company settings and snapshot onto each estimate at creation.
 - **PR-5**: Discount supports `PERCENTAGE` and `FLAT` modes.
 - **PR-6**: Rate snapshots are captured with each estimate version.
 - **PR-7**: Old estimates NEVER change when rates are updated.
 - **PR-8**: Advance percentage defaults to 50%, configurable per estimate.
+- **PR-9**: An estimate may carry **other charges** — manual line items
+  (`{label, amount}`, amount ≥ 0 in ₹) for costs the geometry cannot derive:
+  labor/fabrication, transport, installation, and similar. They are added to the
+  frames subtotal **before** discount, so discount and GST apply to the combined
+  amount (composite supply). Other charges are estimate-level only — they never
+  appear in a frame's unit breakdown or in the bill of materials.
+
+### 9.4 Estimate-Level Aggregation
+
+An estimate prices each frame independently (`unit_subtotal` per §9.1, with no
+discount/GST at frame level), multiplies by the frame's `quantity` to get its
+`line_total`, then applies commercial terms once to the aggregate:
+
+```
+framesSubtotal = Σ line_total                  # all frames
+chargesTotal   = Σ charge.amount               # PR-9 other charges
+grossSubtotal  = framesSubtotal + chargesTotal
+discount       = applyDiscount(grossSubtotal, discountType, discountValue)
+taxable        = grossSubtotal − discount
+gst            = taxable × gstPct / 100        # PR-4
+grandTotal     = round(taxable + gst)          # PR-3: nearest rupee
+advance        = round(grandTotal × advancePct / 100)
+```
+
+Worked example: frames ₹10,000.00; other charges = Transport ₹1,500 +
+Installation ₹2,000 → gross ₹13,500.00; 10% discount → ₹1,350.00;
+taxable ₹12,150.00; GST 18% → ₹2,187.00; grand total ₹14,337;
+advance 50% → ₹7,169 (rounded from 7,168.50).
 
 ---
 
