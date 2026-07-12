@@ -100,19 +100,19 @@ curl http://localhost/api/ready
 
 Access is invite-only — no public sign-up. You need at least one admin to create other users.
 
-**Step 1 — Create an account via the login screen** (any email/password — it will be promoted next).
-
-Or create one directly in the DB:
+**Step 1 — Create the first account directly in the DB** (there is no public sign-up;
+the login screen only signs in existing users). In dev, `python execution/setup.py`
+automates this whole section. In production:
 
 ```bash
 docker compose -f docker-compose.prod.yml exec backend python - <<'EOF'
 import asyncio
-from app.database import AsyncSessionLocal
+from app.database import async_session_factory
 from app.models.user import User
 from app.services.auth import hash_password
 
 async def main():
-    async with AsyncSessionLocal() as db:
+    async with async_session_factory() as db:
         user = User(
             email="admin@example.com",
             name="Admin",

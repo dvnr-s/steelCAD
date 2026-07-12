@@ -24,29 +24,37 @@
 
 ```
 frontend/src/
-├── main.jsx              React root
-├── App.jsx               Router + route guards (ProtectedRoute, AdminRoute)
+├── main.jsx              React root (wrapped in ErrorBoundary)
+├── App.jsx               Router + route guards (ProtectedRoute, RoleRoute)
 ├── index.css            Design-system tokens + layout (CSS grid editor shell)
 ├── api/client.js         Axios instance + interceptors + typed API namespaces
 ├── store/
-│   ├── authStore.js      auth state (persisted) + login/register/logout/fetchMe
+│   ├── authStore.js      auth state (persisted) + login/logout/fetchMe
 │   └── editorStore.js    the design tree, undo/redo, geometry engine, live price
+├── hooks/useThumbnail.js  design thumbnail loader
 ├── lib/
 │   ├── validators.js     client-side mirror of INV-*/V-* rules (live feedback)
+│   ├── canvasDraw.jsx    static tree renderer (thumbnails/previews)
 │   └── format.js         fmtFt / dimLabel (display formatting; height×width)
 ├── components/
 │   ├── DesignCanvas.jsx   Konva canvas: render, zoom/pan, drag interactions
 │   ├── PropertiesPanel.jsx editors for the selected region
 │   ├── NewDesignModal.jsx  create-design dialog
+│   ├── ConfirmModal.jsx    useConfirm() dialog hook (replaces window.confirm)
+│   ├── ErrorBoundary.jsx   top-level render-error fallback
 │   └── TopNav.jsx          top navigation
 └── pages/
-    ├── LoginPage.jsx · RegisterPage.jsx
+    ├── LoginPage.jsx             (accounts are invite-only — no register page)
+    ├── HomePage.jsx              dashboard + global estimate search
     ├── CustomersPage.jsx · CustomerDetailPage.jsx
-    ├── EstimateBuilderPage.jsx   the frames table, terms, PDF
+    ├── EstimateBuilderPage.jsx   the frames table, terms, status, PDF/BOM
     ├── EditorPage.jsx            the canvas workspace (library + frame modes)
-    ├── DashboardPage.jsx         the design library
-    └── RatesPage.jsx             admin rate management
+    ├── DashboardPage.jsx         the design library (SVG thumbnails)
+    ├── RatesPage.jsx · UsersPage.jsx · SettingsPage.jsx   admin/owner
+    └── ActivityPage.jsx · TrashPage.jsx                   admin/owner
 ```
+
+Vitest suites (`*.test.js(x)`) live beside their sources (`npx vitest run`).
 
 ---
 
@@ -54,24 +62,30 @@ frontend/src/
 
 | Route | Page | Guard |
 |---|---|---|
-| `/login`, `/register` | Login / Register | public |
-| `/` | CustomersPage (home) | auth |
+| `/login` | Login (accounts are invite-only) | public |
+| `/` | HomePage (dashboard + search) | auth |
+| `/customers` | CustomersPage | auth |
 | `/customers/:id` | CustomerDetailPage | auth |
 | `/estimates/:id` | EstimateBuilderPage | auth |
 | `/estimates/:estimateId/frames/:frameId` | EditorPage (frame mode) | auth |
 | `/designs` | DashboardPage (library) | auth |
 | `/designs/:id` | EditorPage (library mode) | auth |
-| `/rates` | RatesPage | **admin** |
+| `/rates` | RatesPage | **admin/owner** |
+| `/users` | UsersPage (invite, roles, resets) | **admin/owner** |
+| `/settings` | SettingsPage (company profile) | **admin/owner** |
+| `/activity` | ActivityPage (audit feed) | **admin/owner** |
+| `/trash` | TrashPage (restore soft-deleted) | **admin/owner** |
 
-`ProtectedRoute` redirects unauthenticated users to `/login`; `AdminRoute` redirects
-non-admins to `/`. On boot, `App` calls `fetchMe()` to revalidate the persisted session.
+`ProtectedRoute` redirects unauthenticated users to `/login`; `RoleRoute` redirects
+users lacking the required role to `/`. On boot, `App` calls `fetchMe()` to revalidate
+the persisted session.
 
 ---
 
 ## 4. State stores
 
 ### `authStore` (persisted)
-Holds `user` and `isAuthenticated`; exposes `login/register/logout/fetchMe`. The JWTs
+Holds `user` and `isAuthenticated`; exposes `login/logout/fetchMe`. The JWTs
 themselves live in `localStorage` (read by the Axios interceptor), while the store
 persists only `{user, isAuthenticated}` under the key `steelcad-auth`.
 

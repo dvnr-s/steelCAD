@@ -350,17 +350,22 @@ React 19 + Vite, Konva/react-konva for the canvas, Zustand for state, Axios for 
 react-router-dom for routing, react-hot-toast for notifications, lucide-react for icons.
 
 Routes ([`App.jsx`](../frontend/src/App.jsx)) are wrapped in `ProtectedRoute` (requires
-auth) or `AdminRoute` (requires `is_admin`):
+auth) or `RoleRoute` (requires one of the listed roles):
 
 ```
-/login, /register                              public
-/                       → CustomersPage        (home)
+/login                                          public (accounts are invite-only)
+/                       → HomePage              (dashboard + global estimate search)
+/customers              → CustomersPage
 /customers/:id          → CustomerDetailPage
-/estimates/:id          → EstimateBuilderPage   (frames table, terms, PDF)
+/estimates/:id          → EstimateBuilderPage   (frames table, terms, PDF/BOM)
 /estimates/:eId/frames/:fId → EditorPage        (canvas, frame-edit mode)
-/designs                → DashboardPage          (reusable design library)
+/designs                → DashboardPage          (reusable design library, thumbnails)
 /designs/:id            → EditorPage            (canvas, library mode)
-/rates                  → RatesPage             (admin only)
+/rates                  → RatesPage             (admin/owner)
+/users                  → UsersPage             (admin/owner — invite, roles, resets)
+/settings               → SettingsPage          (admin/owner — company/branding/GST)
+/activity               → ActivityPage          (admin/owner — audit feed)
+/trash                  → TrashPage             (admin/owner — restore soft-deleted)
 ```
 
 ### 8.2 State: two Zustand stores
@@ -483,9 +488,15 @@ rates  (global, admin-managed)
   password hashing, signed with `JWT_SECRET_KEY`. The refresh endpoint validates the
   token *type* to prevent token-class confusion.
 - **Authorization** — all data endpoints require a valid access token
-  (`get_current_user`). Rate mutations additionally require admin (`require_admin`).
-  Admin bootstrap is a **first-run-only** endpoint (`/auth/bootstrap-admin`) that
-  becomes a no-op once any admin exists.
+  (`get_current_user`). Row-level rules go through one seam,
+  [`services/access.py`](../backend/app/services/access.py): reads are shared
+  org-wide; edits require creator or admin/owner (`assert_can_write`); deletes of
+  designs/customers/estimates require admin/owner (`require_role`); non-draft
+  estimates are read-only (`assert_editable`). Roles are `admin`/`owner`/`sales`;
+  accounts are **invite-only** (created via `/users` by admin/owner — there is no
+  public register endpoint). Admin bootstrap is a **first-run-only** endpoint
+  (`/auth/bootstrap-admin`) that becomes a no-op once any admin exists.
+- **Rate limiting** — slowapi limits on the auth and price endpoints.
 - **Transport & exposure** — in production, Postgres and the backend are **not**
   published to the host; only nginx on port 80 is. CORS is restricted to an allow-list
   of known origins.
@@ -495,9 +506,9 @@ rates  (global, admin-managed)
 **Current caveats (be aware):**
 - Tokens are stored in `localStorage` (XSS-exposed) rather than httpOnly cookies — a
   pragmatic choice for an internal tool.
-- Designs and customers are **not yet row-scoped per user**: any authenticated user can
-  read/modify any design or customer. Ownership columns (`created_by`) exist but aren't
-  enforced as access control yet. This is a known gap (see §13).
+- *Reads* remain shared org-wide by design (single-company workspace) — only writes and
+  deletes are scoped. See [AUTHORIZATION_GAPS.md](./AUTHORIZATION_GAPS.md) for the full
+  model and its history.
 
 ---
 
@@ -524,13 +535,16 @@ From the spec's roadmap (§14) and the current code:
   reality and planned for v2.
 - **Section depth is not deducted** from child regions for pricing (matches current
   industry formulas; a future refinement may add it).
-- **No per-user data scoping.** Designs and customers are globally visible to any
-  authenticated user; `created_by` is recorded but not enforced for access.
+- **Reads are shared org-wide** (writes/deletes are role- and creator-scoped via
+  `services/access.py`); true multi-tenant scoping is future work.
 - **Bay windows / fanlight 3D** are modeled as flags/extras, not true 3D.
 - **Deferred door features** — jali on the back of a double-rebate door, finer
   door-leaf panel make-up (§4A.7).
-- **Schema management** — dev auto-creates tables on startup; production should drive
-  schema via Alembic (`backend/migrations/`).
+- **Pricing covers materials + hardware only** — no labor/transport/installation
+  charges, no glass cost (₹0 label by spec), no margins.
+- **Schema management** — Alembic migrations exist (`backend/migrations/versions/`,
+  0001+); dev startup additionally runs `create_all` as a convenience. Production
+  applies `alembic upgrade head` (see [DEPLOY.md](./DEPLOY.md)).
 
 ---
 

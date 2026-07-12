@@ -39,12 +39,14 @@ so the SPA talks to the backend same-origin in dev.
 ### 2.3 Create an admin + seed rates
 
 ```bash
-python execution/setup.py         # registers an account, promotes to admin, seeds rates
+python execution/setup.py         # creates the first account, promotes to admin, seeds rates
 ```
 
-This drives the first-run flow: register a user, call `/auth/bootstrap-admin` (works
-only while no admin exists), then `/rates/seed`. Afterwards, log in at
-<http://localhost:5173>.
+This drives the first-run flow: create the first user directly in the backend
+container (accounts are invite-only — there is no public register endpoint), call
+`/auth/bootstrap-admin` (works only while no admin exists), then `/rates/seed`.
+Afterwards, log in at <http://localhost:5173> and invite further users from the
+**Users** page.
 
 ---
 

@@ -17,8 +17,11 @@ then the code on both sides of the client/server contract.
 first for the complete system model (data flow, request lifecycles, design trade-offs).
 [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md), [`docs/PRICING_ENGINE.md`](docs/PRICING_ENGINE.md),
 [`docs/BACKEND.md`](docs/BACKEND.md), [`docs/FRONTEND.md`](docs/FRONTEND.md), and
-[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) go deeper on each area. This file is a
-condensed pointer for quick orientation — prefer those docs for anything non-trivial.
+[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) go deeper on each area;
+[`docs/DEPLOY.md`](docs/DEPLOY.md) is the production runbook and
+[`docs/AUTHORIZATION_GAPS.md`](docs/AUTHORIZATION_GAPS.md) documents the authorization
+model. This file is a condensed pointer for quick orientation — prefer those docs for
+anything non-trivial.
 
 ## Commands
 
@@ -32,12 +35,20 @@ cd frontend && npm install && npm run dev   # http://localhost:5173, proxies API
 # First-run: create an admin user + seed material rates
 python execution/setup.py
 
-# Backend tests (pricing engine — the only test suite)
-cd backend && ./venv/Scripts/python -m pytest       # or: pytest tests/test_pricing.py -v
-docker exec steelcad-backend-1 python -m pytest tests/test_pricing.py -q   # via container
+# Database migrations (Alembic, backend/migrations/versions/)
+docker exec steelcad-backend-1 alembic upgrade head    # dev also auto-creates via create_all
+docker exec steelcad-backend-1 alembic current
 
-# Frontend lint / build sanity
+# Backend tests — unit suites (pricing/validation/diagram) run standalone;
+# the API integration suite (tests/test_api.py) needs TEST_DATABASE_URL, else it skips
+cd backend && ./venv/Scripts/python -m pytest -q
+docker exec steelcad-db-1 psql -U steelcad -c "CREATE DATABASE steelcad_test"   # once
+docker exec -e TEST_DATABASE_URL=postgresql+asyncpg://steelcad:steelcad@db:5432/steelcad_test \
+  steelcad-backend-1 python -m pytest -q              # full suite (98 tests) in container
+
+# Frontend lint / tests / build sanity
 cd frontend && npm run lint
+npx vitest run
 npx vite build
 
 # Rebuild backend after requirements.txt/Dockerfile changes (--reload won't pick these up)
@@ -94,7 +105,17 @@ frontend requests a price preview; it never adds up rupees itself.
 they're unit-testable without a server or DB; `models/` are SQLAlchemy ORM tables.
 Key services: `pricing.py` (`price_design`/`price_estimate`, pure), `validation.py`
 (`validate_design_tree`, enforces spec invariants INV-1…10 and rules V-1…18, returns
-422 with error list on failure), `auth.py` (JWT + bcrypt), `pdf.py` (WeasyPrint).
+422 with error list on failure), `auth.py` (JWT + bcrypt), `pdf.py` (WeasyPrint),
+`access.py` (row-level write/delete rules — the single authorization seam),
+`audit.py` (append-only activity log), `diagram.py` (server-side SVG schematic of a
+tree, embedded per-frame in the quote PDF), `bom.py` (aggregates pricing line items
+into a materials summary for the `/estimates/{id}/bom.csv` export), `ratelimit.py`
+(slowapi limits on auth/price endpoints).
+
+Routers beyond the core CRUD: `users.py` (invite-only user management), `settings.py`
+(singleton `company_settings` — branding, GSTIN, bank details, default terms, GST %,
+currency), `dashboard.py` (pipeline/monthly metrics), `trash.py` (list/restore
+soft-deleted records), `audit.py` (activity feed).
 
 ### Frontend layout (`frontend/src/`)
 
@@ -108,14 +129,31 @@ validation rules for instant feedback. `EditorPage.jsx` serves both a library de
 (`/designs/:id`) and an estimate frame (`/estimates/:id/frames/:fid`) — branches on
 `frameMode`. Live price is a 600ms-debounced POST to `/price`.
 
+Pages: `HomePage` (dashboard + global estimate search), `CustomersPage`/`CustomerDetailPage`,
+`DashboardPage` (design library with SVG thumbnails), `EstimateBuilderPage`,
+`EditorPage`, and role-gated admin pages (`RatesPage`, `UsersPage`, `SettingsPage`,
+`ActivityPage`, `TrashPage` — see `RoleRoute` in `App.jsx`). Shared UI: `ConfirmModal`
+via `useConfirm()` (never `window.confirm`), `ErrorBoundary`, `canvasDraw.jsx` (static
+tree renderer shared by thumbnails and previews). Frontend tests are Vitest
+(`*.test.js(x)` beside sources).
+
 ### Persistence
 
 `designs` (reusable library templates) vs. `estimate_frames` (frozen snapshots inside
 an estimate — adding a library design to an estimate **copies** its tree; editing one
-never affects the other). `rates` are global and admin-managed
-(`require_admin` dependency). All tables use UUID PKs; geometry is JSONB with a few
-denormalized columns (`outer_width`, `outer_height`, `section_size`, `gauge`) for cheap
-listing without parsing JSON.
+never affects the other). `rates` are global, admin/owner-managed, with an append-only
+`rate_history`. All tables use UUID PKs; geometry is JSONB with a few denormalized
+columns (`outer_width`, `outer_height`, `section_size`, `gauge`) for cheap listing
+without parsing JSON.
+
+**Estimate lifecycle**: status flows `draft → sent → accepted | rejected` via
+`PATCH /estimates/{id}/status` (plus derived `expired` for sent quotes past
+`valid_until`, and `superseded` for old revisions). Non-`draft` estimates are locked
+(`assert_editable`); "revise" clones as rev N+1 and supersedes the parent, "duplicate"
+copies to a fresh draft. Designs/customers/estimates are **soft-deleted**
+(`deleted_at`) and restorable from the Trash page. Schema evolves via Alembic
+(`backend/migrations/versions/`, currently 0001–0010); dev startup still runs
+`create_all` as a convenience.
 
 ### Dev vs. prod
 
@@ -140,6 +178,9 @@ only); `JWT_SECRET_KEY`/`POSTGRES_PASSWORD` are required (no insecure defaults).
   (directives = SOPs/spec, orchestration = decision-making, execution = deterministic
   code) — in this codebase that maps to `directives/` (spec), the app itself
   (orchestration), and `execution/` + backend services (deterministic Python).
-- No per-user data scoping yet: `created_by` is recorded on designs/customers but not
-  enforced as access control — any authenticated user can read/modify any of them.
-  Don't assume ownership checks exist unless you add them.
+- **Authorization** goes through one seam, `backend/app/services/access.py`: reads are
+  shared org-wide; edits require creator or admin/owner (`assert_can_write`); deletes
+  of designs/customers/estimates require admin/owner (`require_role`); non-draft
+  estimates are locked (`assert_editable`). Roles are `admin` / `owner` / `sales`
+  (invite-only user creation via `/users`). Route any new mutation through this seam —
+  see `docs/AUTHORIZATION_GAPS.md` for the model.
