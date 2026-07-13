@@ -12,7 +12,7 @@
 import { Line } from 'react-konva'
 
 export const ACTUAL_SCALE = 60   // "100%" = 60 pixels per foot (true size)
-export const MAX_SCALE = 60      // fit cap — small frames don't blow up past true size
+export const MAX_SCALE = 240     // fit cap — matches the canvas zoom-in limit, so fit can fill the viewport
 export const MIN_SCALE = 8       // fit floor so huge frames stay usable
 export const FIT_PAD = 64        // px reserved around the frame for labels + handles
 
@@ -52,6 +52,14 @@ export function regionFill(region, selectedId) {
   if (rt === 'fixed')   return 'rgba(34,197,94,0.06)'
   if (rt === 'louver')  return 'rgba(139,92,246,0.08)'
   return 'rgba(59,130,246,0.04)'
+}
+
+// Region-type tag text; a double shutter (spec §5.7) is flagged as glass + jali.
+export function regionTag(region) {
+  const rt = region.regionType
+  if (!rt || rt === 'open') return null
+  if (rt === 'shutter' && region.paneSpec?.shutterConfig === 'double') return 'SHUTTER G+J'
+  return rt.toUpperCase()
 }
 
 export function regionStroke(region, selectedId) {

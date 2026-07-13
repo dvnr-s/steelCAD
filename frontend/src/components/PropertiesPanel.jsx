@@ -6,7 +6,7 @@
 import { useState } from 'react'
 import { Scissors, X, Plus } from 'lucide-react'
 import toast from 'react-hot-toast'
-import useEditorStore from '../store/editorStore'
+import useEditorStore, { windowHingeCount } from '../store/editorStore'
 import { fmtFt } from '../lib/format'
 
 const REGION_TYPES = [
@@ -70,15 +70,50 @@ function SplitControls({ regionId }) {
   )
 }
 
+const MaterialSelect = ({ label, value, onChange }) => (
+  <div className="form-group">
+    <label>{label}</label>
+    <select value={value || ''} onChange={(e) => onChange(e.target.value || null)}>
+      <option value="">Select...</option>
+      <option value="MS_PIPE">MS Pipe</option>
+      <option value="GP_SHEET">GP Sheet</option>
+    </select>
+  </div>
+)
+
 function PaneSpecEditor({ region }) {
   const updateRegion = useEditorStore((s) => s.updateRegion)
-  const ps = region.paneSpec || { shutterMaterial: null, infillType: 'none', hasBeading: false }
+  const ps = region.paneSpec || { shutterConfig: 'single', shutterMaterial: null, infillType: 'none', hasBeading: false, jaliMaterial: null, jaliBeading: false }
   const rt = region.regionType
+  const isDouble = rt === 'shutter' && ps.shutterConfig === 'double'
 
   const update = (patch) =>
     updateRegion(region.id, { paneSpec: { ...ps, ...patch } })
 
-  const needsShutterMat = rt === 'shutter' || rt === 'door'
+  // Single ⇄ double shuttering (spec §10.4A). Double = a glass shutter on one
+  // face of the frame + a jali shutter on the other; it forces glass infill and
+  // auto-adds the jali-side (back) hinge set per HW-9. Back to single clears
+  // the jali fields and strips back-side hardware.
+  const setConfig = (config) => {
+    if (config === (ps.shutterConfig || 'single')) return
+    const hardware = region.hardware || []
+    if (config === 'double') {
+      const hasBackHinge = hardware.some((h) => h.hardwareType === 'hinge' && h.side === 'back')
+      updateRegion(region.id, {
+        paneSpec: { ...ps, shutterConfig: 'double', infillType: 'glass' },
+        hardware: hasBackHinge ? hardware : [
+          ...hardware,
+          { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: windowHingeCount(region.height), autoComputed: true, side: 'back' },
+        ],
+      })
+    } else {
+      updateRegion(region.id, {
+        paneSpec: { ...ps, shutterConfig: 'single', jaliMaterial: null, jaliBeading: false },
+        hardware: hardware.filter((h) => h.side !== 'back'),
+      })
+    }
+  }
+
   const canHaveInfill = rt !== 'door' && rt !== 'open' && rt !== 'louver'
 
   if (rt === 'open' || rt === 'louver') {
@@ -87,32 +122,62 @@ function PaneSpecEditor({ region }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {needsShutterMat && (
+      {rt === 'shutter' && (
         <div className="form-group">
-          <label>Shutter Material</label>
-          <select value={ps.shutterMaterial || ''} onChange={(e) => update({ shutterMaterial: e.target.value || null })}>
-            <option value="">Select...</option>
-            <option value="MS_PIPE">MS Pipe</option>
-            <option value="GP_SHEET">GP Sheet</option>
-          </select>
+          <label>Shuttering</label>
+          <div className="flex gap-2">
+            <button className={`btn btn-sm w-full ${!isDouble ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setConfig('single')}>Single</button>
+            <button className={`btn btn-sm w-full ${isDouble ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setConfig('double')}>Double (glass + jali)</button>
+          </div>
+          {isDouble && (
+            <p className="text-xs text-muted" style={{ marginTop: 6, lineHeight: 1.5 }}>
+              Glass shutter on one side of the frame, jali shutter on the other — both panes fully priced, each hinged separately.
+            </p>
+          )}
         </div>
       )}
-      {canHaveInfill && (
-        <div className="form-group">
-          <label>Infill</label>
-          <select value={ps.infillType || 'none'} onChange={(e) => update({ infillType: e.target.value })}>
-            <option value="none">None</option>
-            <option value="glass">Glass</option>
-            <option value="jali">Jali</option>
-          </select>
-        </div>
-      )}
-      {canHaveInfill && ps.infillType !== 'none' && (
-        <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.875rem' }}>
-          <input type="checkbox" checked={ps.hasBeading || false}
-            onChange={(e) => update({ hasBeading: e.target.checked })} />
-          Add Beading
-        </label>
+
+      {isDouble ? (
+        <>
+          <MaterialSelect label="Glass Shutter Material" value={ps.shutterMaterial}
+            onChange={(v) => update({ shutterMaterial: v })} />
+          <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.875rem' }}>
+            <input type="checkbox" checked={ps.hasBeading || false}
+              onChange={(e) => update({ hasBeading: e.target.checked })} />
+            Beading (glass side)
+          </label>
+          <MaterialSelect label="Jali Shutter Material" value={ps.jaliMaterial}
+            onChange={(v) => update({ jaliMaterial: v })} />
+          <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.875rem' }}>
+            <input type="checkbox" checked={ps.jaliBeading || false}
+              onChange={(e) => update({ jaliBeading: e.target.checked })} />
+            Beading (jali side)
+          </label>
+        </>
+      ) : (
+        <>
+          {rt === 'shutter' && (
+            <MaterialSelect label="Shutter Material" value={ps.shutterMaterial}
+              onChange={(v) => update({ shutterMaterial: v })} />
+          )}
+          {canHaveInfill && (
+            <div className="form-group">
+              <label>Infill</label>
+              <select value={ps.infillType || 'none'} onChange={(e) => update({ infillType: e.target.value })}>
+                <option value="none">None</option>
+                <option value="glass">Glass</option>
+                <option value="jali">Jali</option>
+              </select>
+            </div>
+          )}
+          {canHaveInfill && ps.infillType !== 'none' && (
+            <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.875rem' }}>
+              <input type="checkbox" checked={ps.hasBeading || false}
+                onChange={(e) => update({ hasBeading: e.target.checked })} />
+              Add Beading
+            </label>
+          )}
+        </>
       )}
     </div>
   )
@@ -159,6 +224,9 @@ function HardwareEditor({ region }) {
   const hardware = region.hardware || []
   const rt = region.regionType
   const isDoubleRebate = rt === 'door' && region.rebate === 'double'
+  // A double shutter (§5.7) is hinged per shutter leaf: front = glass side, back = jali side.
+  const isDoubleShutter = rt === 'shutter' && (region.paneSpec || {}).shutterConfig === 'double'
+  const hasSides = isDoubleRebate || isDoubleShutter
 
   if (rt !== 'shutter' && rt !== 'door') {
     return <p className="text-xs text-muted">Hardware only on shutter/door regions</p>
@@ -226,7 +294,11 @@ function HardwareEditor({ region }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      {isDoubleRebate && <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Front side</div>}
+      {hasSides && (
+        <div className="text-xs text-muted" style={{ fontWeight: 600 }}>
+          {isDoubleShutter ? 'Glass shutter (front)' : 'Front side'}
+        </div>
+      )}
       {front.map((hw) => <HwRow key={hw.id} hw={hw} />)}
       <div className="flex gap-2">
         <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addHinge('front')}>
@@ -239,17 +311,21 @@ function HardwareEditor({ region }) {
         )}
       </div>
 
-      {isDoubleRebate && (
+      {hasSides && (
         <>
-          <div className="text-xs text-muted" style={{ fontWeight: 600, marginTop: 6 }}>Other side (back)</div>
+          <div className="text-xs text-muted" style={{ fontWeight: 600, marginTop: 6 }}>
+            {isDoubleShutter ? 'Jali shutter (back)' : 'Other side (back)'}
+          </div>
           {back.map((hw) => <HwRow key={hw.id} hw={hw} />)}
           <div className="flex gap-2">
             <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addHinge('back')}>
               <Plus size={12} /> Hinge
             </button>
-            <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addLock('back')}>
-              <Plus size={12} /> Lock
-            </button>
+            {rt === 'door' && (
+              <button className="btn btn-secondary btn-sm" style={{ flex: 1 }} onClick={() => addLock('back')}>
+                <Plus size={12} /> Lock
+              </button>
+            )}
           </div>
         </>
       )}

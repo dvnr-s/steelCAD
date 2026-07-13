@@ -159,6 +159,7 @@
         {% endfor %}
         {% for r in bd.regions %}
           {% if r.pane_structure %}<tr><td>{{ r.region_label }} — {{ r.pane_structure.label }}</td><td>{{ r.pane_structure.description }}</td><td class="ta-r mono">{{ currency }}{{ r.pane_structure.cost|money }}</td></tr>{% endif %}
+          {% if r.pane_structure_2 %}<tr><td>{{ r.region_label }} — {{ r.pane_structure_2.label }}</td><td>{{ r.pane_structure_2.description }}</td><td class="ta-r mono">{{ currency }}{{ r.pane_structure_2.cost|money }}</td></tr>{% endif %}
           {% if r.infill %}<tr><td>{{ r.region_label }} — {{ r.infill.label }}</td><td>{{ r.infill.description }}</td><td class="ta-r mono">{{ currency }}{{ r.infill.cost|money }}</td></tr>{% endif %}
           {% if r.beading %}<tr><td>{{ r.region_label }} — {{ r.beading.label }}</td><td>{{ r.beading.description }}</td><td class="ta-r mono">{{ currency }}{{ r.beading.cost|money }}</td></tr>{% endif %}
           {% if r.grill %}<tr><td>{{ r.region_label }} — {{ r.grill.label }}</td><td>{{ r.grill.description }}</td><td class="ta-r mono">{{ currency }}{{ r.grill.cost|money }}</td></tr>{% endif %}

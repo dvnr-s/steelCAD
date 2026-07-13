@@ -102,3 +102,74 @@ def test_design_validation_short_circuits_on_bounds():
     """validate_design_tree must refuse oversized trees before recursing."""
     errors = validate_design_tree(_tree(_chain(MAX_TREE_DEPTH + 5)))
     assert errors and all(e.startswith("B-") for e in errors)
+
+
+# ─── Double shuttering (V-19 / V-5 / V-16, spec §5.7) ──────────────
+
+def _hinge(side="front"):
+    return {
+        "id": str(uuid4()), "type": "hardware", "hardwareType": "hinge",
+        "variant": "SS_12G", "quantity": 2, "autoComputed": True, "side": side,
+    }
+
+
+def _double_shutter_leaf(**overrides):
+    leaf = _leaf()
+    leaf.update({
+        "regionType": "shutter",
+        "paneSpec": {
+            "shutterConfig": "double",
+            "shutterMaterial": "MS_PIPE", "infillType": "glass", "hasBeading": False,
+            "jaliMaterial": "MS_PIPE", "jaliBeading": False,
+        },
+        "hardware": [_hinge("front"), _hinge("back")],
+    })
+    leaf.update(overrides)
+    return leaf
+
+
+def test_valid_double_shutter_passes():
+    assert validate_design_tree(_tree(_double_shutter_leaf())) == []
+
+
+def test_double_shutter_requires_jali_material():
+    leaf = _double_shutter_leaf()
+    leaf["paneSpec"]["jaliMaterial"] = None
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-19" in e and "jali-side" in e for e in errors)
+
+
+def test_double_shutter_requires_glass_infill():
+    leaf = _double_shutter_leaf()
+    leaf["paneSpec"]["infillType"] = "jali"
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-19" in e and "glass infill" in e for e in errors)
+
+
+def test_double_shutter_only_on_shutter_regions():
+    leaf = _double_shutter_leaf(regionType="fixed", hardware=[])
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-19" in e and "'fixed'" in e for e in errors)
+
+
+def test_jali_fields_rejected_on_single_shutter():
+    leaf = _double_shutter_leaf(hardware=[_hinge("front")])
+    leaf["paneSpec"]["shutterConfig"] = "single"
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-19" in e and "require double shuttering" in e for e in errors)
+
+
+def test_double_shutter_needs_hinges_on_both_sides():
+    leaf = _double_shutter_leaf(hardware=[_hinge("front")])
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-5" in e and "each side" in e for e in errors)
+
+
+def test_back_hinge_allowed_on_double_shutter_but_not_single():
+    # Double shutter: back-side hinge is the jali shutter's — valid (V-16).
+    assert validate_design_tree(_tree(_double_shutter_leaf())) == []
+    # Single shutter: no back side exists.
+    leaf = _double_shutter_leaf()
+    leaf["paneSpec"] = {"shutterMaterial": "MS_PIPE", "infillType": "glass", "hasBeading": False}
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-16" in e for e in errors)

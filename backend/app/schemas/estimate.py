@@ -30,6 +30,8 @@ class RegionBreakdown(BaseModel):
     region_type: str
     dimensions: str
     pane_structure: Optional[LineItem] = None
+    # Second shutter leaf of a double-shuttered region (spec §5.7) — jali side.
+    pane_structure_2: Optional[LineItem] = None
     infill: Optional[LineItem] = None
     beading: Optional[LineItem] = None
     grill: Optional[LineItem] = None

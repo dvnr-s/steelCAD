@@ -29,7 +29,7 @@ function PriceDisplay({ price }) {
   const fmt = (n) => `₹${(n ?? 0).toLocaleString('en-IN')}`
   const splitTotal = (price.splits ?? []).reduce((s, x) => s + (x.cost ?? 0), 0)
   const paneTotal = (price.regions ?? []).reduce((s, r) =>
-    s + (r.pane_structure?.cost ?? 0) + (r.infill?.cost ?? 0) + (r.beading?.cost ?? 0) + (r.grill?.cost ?? 0), 0)
+    s + (r.pane_structure?.cost ?? 0) + (r.pane_structure_2?.cost ?? 0) + (r.infill?.cost ?? 0) + (r.beading?.cost ?? 0) + (r.grill?.cost ?? 0), 0)
   const hwTotal = (price.regions ?? []).reduce((s, r) =>
     s + (r.hardware ?? []).reduce((a, h) => a + (h.cost ?? 0), 0), 0)
 
@@ -135,7 +135,8 @@ function PricingBreakdown({ price }) {
                 </span>
                 <span style={mono}>{fmt(r.subtotal)}</span>
               </div>
-              {r.pane_structure && <div style={{ ...row, ...dim }}><span>Pane</span><span>{fmt(r.pane_structure.cost)}</span></div>}
+              {r.pane_structure && <div style={{ ...row, ...dim }}><span>{r.pane_structure_2 ? 'Pane (glass side)' : 'Pane'}</span><span>{fmt(r.pane_structure.cost)}</span></div>}
+              {r.pane_structure_2 && <div style={{ ...row, ...dim }}><span>Pane (jali side)</span><span>{fmt(r.pane_structure_2.cost)}</span></div>}
               {r.infill && <div style={{ ...row, ...dim }}><span>Infill</span><span>{fmt(r.infill.cost)}</span></div>}
               {r.beading && <div style={{ ...row, ...dim }}><span>Beading</span><span>{fmt(r.beading.cost)}</span></div>}
               {r.grill && <div style={{ ...row, ...dim }}><span>Grill</span><span>{fmt(r.grill.cost)}</span></div>}
@@ -187,23 +188,30 @@ export default function EditorPage() {
   const [showHelp, setShowHelp] = useState(false)
   // Pricing fetch failed — the displayed price no longer matches the tree.
   const [priceStale, setPriceStale] = useState(false)
-  const canvasRef = useRef(null)
-  const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 })
+  const canvasRoRef = useRef(null)
+  // 0×0 until the canvas div is measured — DesignCanvas defers its view init
+  // until a real size arrives, so nothing ever fits to a placeholder.
+  const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 })
   const { confirm, ConfirmDialog } = useConfirm()
 
   // Live design validation — mirrors backend rules for instant feedback.
   const issues = useMemo(() => (tree ? validateTree(tree) : []), [tree])
   const select = useEditorStore((s) => s.select)
 
-  // Track canvas size
-  useEffect(() => {
-    if (!canvasRef.current) return
-    const ro = new ResizeObserver((entries) => {
-      const entry = entries[0]
-      setCanvasSize({ width: entry.contentRect.width, height: entry.contentRect.height })
-    })
-    ro.observe(canvasRef.current)
-    return () => ro.disconnect()
+  // Track canvas size. Callback ref rather than an on-mount effect: the canvas
+  // div doesn't exist until `loading` resolves, so a []-deps effect would run
+  // against a null ref and never attach the observer (stage stuck at its
+  // initial size, dead space beyond it).
+  const canvasRef = useCallback((node) => {
+    canvasRoRef.current?.disconnect()
+    canvasRoRef.current = null
+    if (node) {
+      const ro = new ResizeObserver(([entry]) => {
+        setCanvasSize({ width: entry.contentRect.width, height: entry.contentRect.height })
+      })
+      ro.observe(node)
+      canvasRoRef.current = ro
+    }
   }, [])
 
   // Load existing design (library mode) or frame (estimate mode)

@@ -22,6 +22,9 @@ export const makeLeafRegion = (x, y, w, h) => ({
 // Door hinge auto-count by leaf height (spec R-5 / §4A): ≤7ft→3, ≤8ft→4, else 5.
 export const doorHingeCount = (height) => (height <= 7 ? 3 : height <= 8 ? 4 : 5)
 
+// Window shutter hinge auto-count by leaf height (spec R-4): ≤6ft→2, ≤7ft→3, ≤8ft→4, else 5.
+export const windowHingeCount = (height) => (height <= 6 ? 2 : height <= 7 ? 3 : height <= 8 ? 4 : 5)
+
 // A door leaf pre-typed as a door (used to seed a standalone door product).
 // A door has NO pane/grill (§4A.2) — only hardware (hinges/lock) + hand/rebate.
 export const makeDoorRegion = (x, y, w, h) => ({
@@ -40,7 +43,7 @@ export const makeWindowRegion = (w, h, windowType = 'fixed') => ({
   regionType: windowType,
   paneSpec: { shutterMaterial: null, infillType: 'none', hasBeading: false },
   hardware: windowType === 'shutter'
-    ? [{ id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: 2, autoComputed: true, side: 'front' }]
+    ? [{ id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: windowHingeCount(h), autoComputed: true, side: 'front' }]
     : [],
 })
 

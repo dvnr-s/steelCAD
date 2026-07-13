@@ -107,11 +107,15 @@ def tree_to_svg(tree: dict, width: int = 360, height: int = 270) -> str:
                 f'fill-opacity="{fill_o}" stroke="{stroke_c}" stroke-width="1"/>'
             )
 
-            # Region-type tag (top-left).
+            # Region-type tag (top-left) — mirrors canvasDraw.regionTag: a double
+            # shutter (§5.7) is flagged as glass + jali.
             if is_leaf and rt != "open":
+                tag = rt.upper()
+                if rt == "shutter" and (region.get("paneSpec") or {}).get("shutterConfig") == "double":
+                    tag = "SHUTTER G+J"
                 parts.append(
                     f'<text x="{rx + 4}" y="{ry + 13}" font-size="9" fill="{stroke_c}" '
-                    f'fill-opacity="0.75" font-family="monospace">{escape(rt.upper())}</text>'
+                    f'fill-opacity="0.75" font-family="monospace">{escape(tag)}</text>'
                 )
 
             # Dimension label (height×width), centered, when the region is big enough.

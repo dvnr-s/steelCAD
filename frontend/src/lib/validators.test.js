@@ -137,6 +137,50 @@ describe('validateTree', () => {
     expect(issues).toEqual([])
   })
 
+  it('returns no issues for a valid double shutter (glass + jali)', () => {
+    const issues = validateTree(tree({
+      regionType: 'shutter',
+      paneSpec: { shutterConfig: 'double', shutterMaterial: 'MS_PIPE', infillType: 'glass', jaliMaterial: 'MS_PIPE' },
+      hardware: [{ hardwareType: 'hinge' }, { hardwareType: 'hinge', side: 'back' }],
+    }))
+    expect(issues).toEqual([])
+  })
+
+  it('returns error for double shutter without a jali-side material', () => {
+    const issues = validateTree(tree({
+      regionType: 'shutter',
+      paneSpec: { shutterConfig: 'double', shutterMaterial: 'MS_PIPE', infillType: 'glass' },
+      hardware: [{ hardwareType: 'hinge' }, { hardwareType: 'hinge', side: 'back' }],
+    }))
+    expect(issues.some(i => i.message.includes('jali-side material'))).toBe(true)
+  })
+
+  it('returns error for double shuttering on a fixed region', () => {
+    const issues = validateTree(tree({
+      regionType: 'fixed',
+      paneSpec: { shutterConfig: 'double', infillType: 'glass', jaliMaterial: 'MS_PIPE' },
+    }))
+    expect(issues.some(i => i.message.includes('only shutter regions'))).toBe(true)
+  })
+
+  it('returns error for jali-side fields on a single shutter', () => {
+    const issues = validateTree(tree({
+      regionType: 'shutter',
+      paneSpec: { shutterMaterial: 'MS_PIPE', infillType: 'glass', jaliMaterial: 'MS_PIPE' },
+      hardware: [{ hardwareType: 'hinge' }],
+    }))
+    expect(issues.some(i => i.message.includes('require double shuttering'))).toBe(true)
+  })
+
+  it('returns error for double shutter missing a hinge on one side', () => {
+    const issues = validateTree(tree({
+      regionType: 'shutter',
+      paneSpec: { shutterConfig: 'double', shutterMaterial: 'MS_PIPE', infillType: 'glass', jaliMaterial: 'MS_PIPE' },
+      hardware: [{ hardwareType: 'hinge' }],
+    }))
+    expect(issues.some(i => i.message.includes('hinge on each side'))).toBe(true)
+  })
+
   it('returns split error when a side is below 0.5ft', () => {
     const splitRegion = {
       id: 'sr',

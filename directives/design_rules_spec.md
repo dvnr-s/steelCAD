@@ -107,9 +107,18 @@ autoComputed  : boolean — true if quantity was auto-derived from dimensions
 
 #### PaneSpec
 ```
-shutterMaterial : "MS_PIPE" | "GP_SHEET" | null  — only for shutter/door regions
-infillType      : "none" | "glass" | "jali"      — what fills the pane
-hasBeading      : boolean                         — optional add-on (applicable to glass OR jali)
+shutterConfig   : "single" | "double"             — shutter regions only; default "single".
+                                                    "double" = two independent shutter leaves on the
+                                                    same opening: a glass shutter on one face of the
+                                                    frame and a jali shutter on the other (§5.7)
+shutterMaterial : "MS_PIPE" | "GP_SHEET" | null  — shutter regions only; in a double shutter this
+                                                    is the GLASS-side shutter's material
+infillType      : "none" | "glass" | "jali"      — what fills the pane; a double shutter is always
+                                                    "glass" (the jali side is implied — §5.7)
+hasBeading      : boolean                         — optional add-on (applicable to glass OR jali);
+                                                    in a double shutter: beading on the glass side
+jaliMaterial    : "MS_PIPE" | "GP_SHEET" | null  — double shutter only: jali-side shutter's material
+jaliBeading     : boolean                         — double shutter only: beading on the jali side
 ```
 
 ---
@@ -192,7 +201,7 @@ A leaf region's `regionType` defines what occupies that space:
 |------------|---------|:-------------------:|:-----------:|:-------------:|
 | `open` | Empty opening, no infill | No | No | No |
 | `fixed` | Fixed (non-operable) panel | No | Optional (glass / jali) | No |
-| `shutter` | Operable window pane (hinged) | Yes (RF-based) | Optional (glass / jali) | Hinges (window logic), **NO lock** |
+| `shutter` | Operable window pane (hinged); single- or double-shuttered (§5.7) | Yes (RF-based; ×2 panes when double) | Optional (glass / jali; double = glass + jali) | Hinges (window logic, per shutter), **NO lock** |
 | `door` | Operable door leaf (hinged) | **No** (leaf not priced separately — §4A.2) | **No** (no infill, no grill) | Hinges (door logic), optional lock |
 | `louver` | Ventilation louver | No | No | No |
 
@@ -404,6 +413,7 @@ pane_total =
 | `shutter` 3×4ft, MS_PIPE | glass | yes | 2×(3+4)×100 = ₹1,400 | ₹0 | 2×(3+4)×40 = ₹560 | ₹1,960 |
 | `shutter` 3×4ft, MS_PIPE | jali | yes | ₹1,400 | 3×4×110 = ₹1,320 | ₹560 | ₹3,280 |
 | `shutter` 3×4ft, MS_PIPE | jali | no | ₹1,400 | ₹1,320 | ₹0 | ₹2,720 |
+| `shutter` 3×4ft, **double** (glass MS_PIPE + jali MS_PIPE), beading glass side only | glass + jali | glass side | ₹1,400 + ₹1,400 | ₹1,320 | ₹560 | ₹4,680 |
 | `fixed` 3×4ft | glass | yes | ₹0 | ₹0 | ₹560 | ₹560 |
 | `fixed` 3×4ft | jali | yes | ₹0 | ₹1,320 | ₹560 | ₹1,880 |
 
@@ -421,6 +431,52 @@ pane_total =
 - **P-10**: Each region's pane specification is independent. Do not merge or infer across regions.
 - **P-11**: When a region is subdivided, its pane specification is cleared.
 - **P-12**: `door` regions have NO pane specification at all — no shutter material, no infill, no beading, no grill (§4A.2). Their `paneSpec` is `null`.
+- **P-13**: `shutterConfig: "double"` is valid ONLY on `shutter` regions. `fixed`, `door`, `open`, and `louver` regions are always single (§5.7).
+- **P-14**: A double shutter is exactly one glass side + one jali side. The glass side is described by `shutterMaterial` / `infillType: "glass"` / `hasBeading`; the jali side by `jaliMaterial` / `jaliBeading`. Each side's structural pane is FULLY priced (`2 × (w + h) × its material rate`) — the second shutter is never free or discounted.
+- **P-15**: The jali side of a double shutter always carries the jali mesh cost (area-based; P-7 applies to that side).
+- **P-16**: Beading is per side: `hasBeading` beads the glass side, `jaliBeading` beads the jali side. Each beaded side is an independent `2 × (w + h)` run at the beading rate.
+
+### 5.7 Double Shuttering (glass + jali)
+
+In fabrication, a window opening can be shuttered on **both faces of the frame**: a glass
+shutter on one side and a jali (wire-mesh) shutter on the other — e.g. glass inside for
+weather, jali outside for ventilation/insects. This is modeled on a single `shutter` leaf
+region via `paneSpec.shutterConfig: "double"`; the region is never split into two leaves
+for this.
+
+A double shutter means **two independent shutter leaves on the same opening**:
+
+| Side | Structural pane | Infill | Beading | Hinges |
+|------|-----------------|--------|---------|--------|
+| Glass side | `2 × (w + h) × rate(shutterMaterial)` | glass = ₹0 | `hasBeading` | `side: "front"` hardware |
+| Jali side | `2 × (w + h) × rate(jaliMaterial)` | jali mesh = `w × h × jali_rate` (always) | `jaliBeading` | `side: "back"` hardware |
+
+Rules:
+
+1. Only `shutter` regions may be double-shuttered (P-13). The only supported combination
+   is one glass side + one jali side (glass+glass or jali+jali doubles are NOT valid);
+   `infillType` stays `"glass"` while double.
+2. Both structural panes are fully priced — pane cost is exactly the sum of the two
+   sides' RF runs at their own material rates (P-14). The two sides may choose
+   different materials (e.g. glass side GP_SHEET, jali side MS_PIPE).
+3. Each shutter leaf is hinged independently (HW-9): the glass-side shutter carries
+   `side: "front"` hinges, the jali-side shutter `side: "back"` hinges, each auto-counted
+   by window logic (R-4) — so a double shutter carries 2× the auto hinge count.
+4. Toggling back to single clears `jaliMaterial` / `jaliBeading` and removes all
+   `side: "back"` hardware.
+
+**Worked example** — `shutter` 3ft × 4ft, double: glass side MS_PIPE with beading,
+jali side MS_PIPE without beading, 2+2 SS_12G hinges:
+
+```
+glass-side pane : 2×(3+4) × 100 = ₹1,400
+jali-side pane  : 2×(3+4) × 100 = ₹1,400
+jali mesh       : 3×4 × 110     = ₹1,320
+beading (glass) : 2×(3+4) × 40  = ₹560
+hinges          : (2 + 2) × 120 = ₹480
+                                  ─────
+region subtotal                   ₹5,160
+```
 
 ---
 
@@ -548,6 +604,10 @@ Hardware items attach to specific leaf regions.
 - **HW-6**: Lock is optional on `door` regions, user-toggled. Default: no lock.
 - **HW-7**: When a shutter/door region is subdivided, hardware is removed.
 - **HW-8**: Default hinge variant: `SS_12G`. User can change.
+- **HW-9**: A double-shuttered region (§5.7) is hinged **per shutter**: the glass-side
+  shutter's hinges use `side: "front"`, the jali-side shutter's hinges use `side: "back"`.
+  Auto-count (HW-2 / R-4) applies to each shutter independently, so a double shutter
+  carries twice the auto hinge count. Each side must have at least one hinge (V-5).
 
 ---
 
@@ -618,15 +678,20 @@ function priceDesign(tree):
                 paneRF = 2 × (region.width + region.height)
                 paneRate = lookupShutterRate(paneSpec.shutterMaterial)
                 regionBreakdown.paneStructure = paneRF × paneRate
+                # Double shutter (§5.7): the jali-side leaf is a second, fully-priced pane.
+                if paneSpec.shutterConfig == "double":
+                    regionBreakdown.paneStructure2 = paneRF × lookupShutterRate(paneSpec.jaliMaterial)
             
-            # Infill cost
-            if paneSpec and paneSpec.infillType == "jali":
+            # Infill cost — the jali side of a double shutter always carries mesh (§5.7)
+            if paneSpec and (paneSpec.infillType == "jali" or paneSpec.shutterConfig == "double"):
                 regionBreakdown.infill = region.width × region.height × lookupRate("JALI_WIRE_MESH")
             # glass infill = ₹0, no line item needed
             
-            # Beading cost
-            if paneSpec and paneSpec.hasBeading:
-                beadingRF = 2 × (region.width + region.height)
+            # Beading cost — one 2×(w+h) run per beaded side (a double shutter can bead both, P-16)
+            beadedSides = (1 if paneSpec and paneSpec.hasBeading else 0)
+                        + (1 if paneSpec and paneSpec.shutterConfig == "double" and paneSpec.jaliBeading else 0)
+            if beadedSides > 0:
+                beadingRF = beadedSides × 2 × (region.width + region.height)
                 regionBreakdown.beading = beadingRF × lookupRate("GLASS_BEADING")
             
             # Hardware costs
@@ -758,6 +823,15 @@ advance 50% → ₹7,169 (rounded from 7,168.50).
 4. If infill changed from glass/jali to `none`, beading is auto-removed.
 5. Pricing updates (jali adds area cost; glass adds ₹0).
 
+### 10.4A User toggles double shuttering on a region
+1. Validate: region is a leaf with type `shutter` (P-13).
+2. Toggling to `double`: `infillType` is forced to `"glass"` (the jali side is implied);
+   the user selects the jali-side material (`jaliMaterial`); a jali-side hinge set is
+   auto-added with `side: "back"` (window hinge logic R-4, per HW-9).
+3. Toggling to `single`: `jaliMaterial` and `jaliBeading` are cleared; all `side: "back"`
+   hardware is removed.
+4. Pricing updates (second pane run + jali mesh + per-side beading + per-side hinges).
+
 ### 10.5 User toggles beading on a region
 1. Validate: region has infill (glass or jali). Reject if infillType = "none".
 2. PaneSpec.hasBeading is toggled.
@@ -806,7 +880,8 @@ The system MUST reject invalid states rather than guessing:
 - **V-2**: No region dimension may be < 0.5 ft.
 - **V-3**: Split position must leave at least 0.5 ft on each side.
 - **V-4**: Every leaf region MUST have a regionType assigned before estimate generation.
-- **V-5**: `shutter` and `door` regions MUST have at least one hinge.
+- **V-5**: `shutter` and `door` regions MUST have at least one hinge. A double-shuttered
+  region (§5.7) must have at least one hinge on EACH side (front and back).
 - **V-6**: MS grill cannot be applied to a branch region. SS grill CAN be applied to a branch region.
 - **V-7**: The tree must pass all invariants (INV-1 through INV-10) before saving.
 - **V-8**: If geometry is ambiguous, reject with a clear error message.
@@ -816,9 +891,10 @@ The system MUST reject invalid states rather than guessing:
 - **V-12**: `shutter` regions must have a shutter material selected in paneSpec. (`door` regions have NO pane — see V-18.)
 - **V-13**: Beading cannot be applied to a region with `infillType: "none"`.
 - **V-14**: Lock cannot be applied to `shutter` (window pane) regions. Only `door` regions.
-- **V-16**: `side: "back"` hardware is valid only on a `door` region whose `rebate` is `"double"` (§4A.6). A single-rebate door has no back side.
+- **V-16**: `side: "back"` hardware is valid only on a `door` region whose `rebate` is `"double"` (§4A.6) or on a double-shuttered `shutter` region (§5.7, HW-9). A single-rebate door / single shutter has no back side.
 - **V-17**: `doorHand` and `rebate` are meaningful only on `door` regions. They are ignored (or rejected) on any other region type.
 - **V-18**: `door` regions carry hardware only — they must NOT have a shutter material, infill, beading (paneSpec is `null`), or any grill overlay (§4A.2).
+- **V-19**: `shutterConfig: "double"` is valid only on `shutter` regions (P-13). A double shutter MUST have a jali-side material (`jaliMaterial`) and its `infillType` MUST be `"glass"`. When `shutterConfig` is `"single"` (or absent), `jaliMaterial` and `jaliBeading` must not be set.
 
 ---
 
@@ -1005,6 +1081,7 @@ These assumptions are made to remove ambiguity. If any are wrong, update this sp
 25. **Door product base is in the concrete (§4A.1).** A `productType: "door"` design's outer FRAME is 3-sided — `2 × height + width` — never billing the bottom run (it sits in the concrete). Window products are unchanged.
 26. **Rebate is price-neutral (§4A.5).** Single and double rebate cost the same; double rebate only permits `side: "back"` hardware.
 27. **Door hand is cosmetic (§4A.4).** `doorHand` (`left`/`right`) affects drawing only, never price.
+28. **Double shuttering (§5.7).** A `shutter` region may carry two independent shutter leaves — glass on one face of the frame, jali on the other. Both structural panes are fully priced at their own material rates, the jali side always carries mesh cost, beading is per side, and each shutter is hinged independently (`front` = glass side, `back` = jali side).
 
 ---
 
@@ -1023,6 +1100,7 @@ These assumptions are made to remove ambiguity. If any are wrong, update this sp
 | **Region type** | What a leaf region IS (open, fixed, shutter, door, louver) |
 | **Pane specification** | The three-layer definition of a region: structural pane + infill + beading |
 | **Structural pane** | The physical shutter/door frame, priced by running feet |
+| **Double shutter** | Two independent shutter leaves on one opening — a glass shutter on one face of the frame and a jali shutter on the other (§5.7) |
 | **Infill** | What fills the pane opening: glass (₹0), jali (area-based), or none |
 | **Beading** | Edge trim around infill, priced by perimeter (applies to glass AND jali) |
 | **Overlay** | Grill only — a detachable material layer on a region |

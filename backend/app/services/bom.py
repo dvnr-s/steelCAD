@@ -16,7 +16,7 @@ def _iter_line_items(breakdown: dict):
     for s in breakdown.get("splits", []):
         yield s
     for r in breakdown.get("regions", []):
-        for key in ("pane_structure", "infill", "beading", "grill"):
+        for key in ("pane_structure", "pane_structure_2", "infill", "beading", "grill"):
             if r.get(key):
                 yield r[key]
         for hw in r.get("hardware", []):

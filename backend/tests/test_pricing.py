@@ -375,6 +375,100 @@ def test_jali_with_beading():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Test: Double shuttering (§5.7) — glass + jali leaves on one opening
+# ═══════════════════════════════════════════════════════════════════
+
+def _hinge(quantity=2, side="front"):
+    return {
+        "id": _uuid(), "type": "hardware",
+        "hardwareType": "hinge", "variant": "SS_12G",
+        "quantity": quantity, "autoComputed": True, "side": side,
+    }
+
+
+def test_double_shutter_spec_example():
+    """
+    Spec §5.7 worked example: shutter 3×4ft, double —
+    glass side MS_PIPE with beading, jali side MS_PIPE, 2+2 hinges.
+    Glass pane: 2×(3+4)×100 = ₹1,400
+    Jali pane:  2×(3+4)×100 = ₹1,400
+    Jali mesh:  3×4×110     = ₹1,320
+    Beading:    2×(3+4)×40  = ₹560 (glass side only)
+    Hinges:     4×120       = ₹480
+    Subtotal: ₹5,160
+    """
+    root = _leaf_region(
+        width=3.0, height=4.0,
+        region_type="shutter",
+        pane_spec={
+            "shutterConfig": "double",
+            "shutterMaterial": "MS_PIPE", "infillType": "glass", "hasBeading": True,
+            "jaliMaterial": "MS_PIPE", "jaliBeading": False,
+        },
+        hardware=[_hinge(side="front"), _hinge(side="back")],
+    )
+    tree = _design_tree(3.0, 4.0, root, "5", "18G")
+    result = price_design(tree, RATES)
+
+    region = result["regions"][0]
+    assert region["pane_structure"]["cost"] == 1400.0
+    assert "glass side" in region["pane_structure"]["label"]
+    assert region["pane_structure_2"]["cost"] == 1400.0
+    assert "jali side" in region["pane_structure_2"]["label"]
+    assert region["infill"]["cost"] == 1320.0     # jali side always carries mesh (P-15)
+    assert region["beading"]["cost"] == 560.0     # one beaded side
+    assert region["subtotal"] == 5160.0
+
+
+def test_double_shutter_mixed_materials_both_beaded():
+    """
+    Sides price independently (P-14/P-16): glass side GP_SHEET, jali side MS_PIPE,
+    beading on both sides = a 2×perimeter beading run.
+    """
+    root = _leaf_region(
+        width=3.0, height=4.0,
+        region_type="shutter",
+        pane_spec={
+            "shutterConfig": "double",
+            "shutterMaterial": "GP_SHEET", "infillType": "glass", "hasBeading": True,
+            "jaliMaterial": "MS_PIPE", "jaliBeading": True,
+        },
+        hardware=[_hinge(side="front"), _hinge(side="back")],
+    )
+    tree = _design_tree(3.0, 4.0, root, "5", "18G")
+    result = price_design(tree, RATES)
+
+    region = result["regions"][0]
+    assert region["pane_structure"]["cost"] == 3500.0    # 14 RFT × ₹250
+    assert region["pane_structure_2"]["cost"] == 1400.0  # 14 RFT × ₹100
+    assert region["beading"]["quantity"] == 28.0         # 2 × 2×(3+4)
+    assert region["beading"]["cost"] == 1120.0
+    assert region["infill"]["cost"] == 1320.0
+    assert region["subtotal"] == 3500 + 1400 + 1320 + 1120 + 480
+
+
+def test_single_shutter_unaffected_by_double_fields():
+    """
+    Back-compat: a paneSpec without shutterConfig prices exactly as before —
+    no second pane, no implied jali mesh, plain 'Shutter pane' label.
+    """
+    root = _leaf_region(
+        width=3.0, height=4.0,
+        region_type="shutter",
+        pane_spec={"shutterMaterial": "MS_PIPE", "infillType": "glass", "hasBeading": False},
+        hardware=[_hinge()],
+    )
+    tree = _design_tree(3.0, 4.0, root, "5", "18G")
+    result = price_design(tree, RATES)
+
+    region = result["regions"][0]
+    assert region["pane_structure"]["label"] == "Shutter pane (MS Pipe)"
+    assert region["pane_structure_2"] is None
+    assert region["infill"] is None
+    assert region["subtotal"] == 1400.0 + 240.0
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Test: Discount — percentage
 # ═══════════════════════════════════════════════════════════════════
 

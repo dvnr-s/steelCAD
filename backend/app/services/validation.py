@@ -1,6 +1,6 @@
 """
 Design tree validation service.
-Implements invariants (INV-1..INV-10) and validation rules (V-1..V-15)
+Implements invariants (INV-1..INV-10) and validation rules (V-1..V-19)
 from design_rules_spec.md §3.3 and §11.
 """
 
@@ -178,7 +178,9 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
     # P-5: open/louver have no pane spec
     if rt in ("open", "louver") and ps:
         infill = ps.get("infillType", "none")
-        if infill != "none" or ps.get("hasBeading") or ps.get("shutterMaterial"):
+        if (infill != "none" or ps.get("hasBeading") or ps.get("shutterMaterial")
+                or ps.get("jaliMaterial") or ps.get("jaliBeading")
+                or ps.get("shutterConfig", "single") != "single"):
             errors.append(f"P-5: '{rt}' region {rid} should not have pane specification")
 
     # V-12: shutter regions must have a shutter material (door regions do NOT —
@@ -186,6 +188,21 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
     if rt == "shutter":
         if not ps or not ps.get("shutterMaterial"):
             errors.append(f"V-12: shutter region {rid} must have a shutter material selected")
+
+    # V-19: double shuttering (§5.7) — shutter regions only; needs a jali-side
+    # material; the explicit infill is the glass side. Jali-side fields are
+    # meaningless while single.
+    is_double_shutter = rt == "shutter" and (ps or {}).get("shutterConfig") == "double"
+    if (ps or {}).get("shutterConfig", "single") == "double":
+        if rt != "shutter":
+            errors.append(f"V-19: double shuttering is only valid on 'shutter' regions, not '{rt}' region {rid}")
+        else:
+            if not ps.get("jaliMaterial"):
+                errors.append(f"V-19: double-shuttered region {rid} must have a jali-side shutter material selected")
+            if ps.get("infillType", "none") != "glass":
+                errors.append(f"V-19: double-shuttered region {rid} must have glass infill (the jali side is implied)")
+    elif ps and (ps.get("jaliMaterial") or ps.get("jaliBeading")):
+        errors.append(f"V-19: jali-side pane fields on region {rid} require double shuttering")
 
     # V-18: door regions carry hardware only — no pane (shutter material / infill /
     # beading) and no grill overlay (§4A.2)
@@ -195,11 +212,17 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
         if region.get("overlays"):
             errors.append(f"V-18: door region {rid} cannot have a grill")
 
-    # V-5: shutter/door must have at least one hinge
+    # V-5: shutter/door must have at least one hinge; a double shutter is hinged
+    # per shutter leaf (HW-9) — front (glass side) AND back (jali side)
     if rt in ("shutter", "door"):
         has_hinge = any(hw.get("hardwareType") == "hinge" for hw in hardware)
         if not has_hinge:
             errors.append(f"V-5: {rt} region {rid} must have at least one hinge")
+        elif is_double_shutter:
+            front = any(hw.get("hardwareType") == "hinge" and hw.get("side", "front") != "back" for hw in hardware)
+            back = any(hw.get("hardwareType") == "hinge" and hw.get("side") == "back" for hw in hardware)
+            if not (front and back):
+                errors.append(f"V-5: double-shuttered region {rid} must have at least one hinge on each side (HW-9)")
 
     # V-14: Lock only on door regions
     for hw in hardware:
@@ -209,12 +232,13 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
                 f"Only 'door' regions."
             )
 
-    # V-16: Back-side hardware requires a double-rebate door (§4A.6)
+    # V-16: Back-side hardware requires a double-rebate door (§4A.6) or a
+    # double-shuttered region (§5.7 — the back side is the jali shutter)
     has_back_hw = any(hw.get("side") == "back" for hw in hardware)
-    if has_back_hw and not (rt == "door" and region.get("rebate") == "double"):
+    if has_back_hw and not (rt == "door" and region.get("rebate") == "double") and not is_double_shutter:
         errors.append(
             f"V-16: Back-side hardware on region {rid} requires a double-rebate "
-            f"door. A single-rebate door has no back side."
+            f"door or a double-shuttered region."
         )
 
     # V-17: doorHand / rebate are meaningful only on door regions
@@ -248,7 +272,10 @@ def _validate_branch(region: dict, errors: list[str]) -> None:
     if ps:
         if (ps.get("infillType", "none") != "none"
                 or ps.get("hasBeading")
-                or ps.get("shutterMaterial")):
+                or ps.get("shutterMaterial")
+                or ps.get("jaliMaterial")
+                or ps.get("jaliBeading")
+                or ps.get("shutterConfig", "single") != "single"):
             errors.append(f"INV-6: Branch region {rid} must not have pane specification")
 
     # INV-6: Branch hardware must be empty

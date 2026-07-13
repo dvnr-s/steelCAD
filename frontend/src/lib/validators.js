@@ -30,6 +30,24 @@ function pushLeafIssues(region, issues) {
     issues.push({ id: region.id, message: `shutter ${label} needs a shutter material` })
   }
 
+  // V-19: double shuttering (§5.7) — shutter regions only; the jali side needs a
+  // material; the explicit infill is the glass side
+  const isDoubleShutter = rt === 'shutter' && ps.shutterConfig === 'double'
+  if (ps.shutterConfig === 'double') {
+    if (rt !== 'shutter') {
+      issues.push({ id: region.id, message: `Double shuttering on ${rt} ${label} — only shutter regions can be double-shuttered` })
+    } else {
+      if (!ps.jaliMaterial) {
+        issues.push({ id: region.id, message: `Double shutter ${label} needs a jali-side material` })
+      }
+      if (ps.infillType !== 'glass') {
+        issues.push({ id: region.id, message: `Double shutter ${label} must have glass infill (the jali side is implied)` })
+      }
+    }
+  } else if (ps.jaliMaterial || ps.jaliBeading) {
+    issues.push({ id: region.id, message: `Jali-side pane fields on ${label} require double shuttering` })
+  }
+
   // V-18: door regions carry hardware only — no pane (material/infill/beading) or grill
   if (rt === 'door') {
     if (ps.shutterMaterial || (ps.infillType && ps.infillType !== 'none') || ps.hasBeading) {
@@ -40,11 +58,18 @@ function pushLeafIssues(region, issues) {
     }
   }
 
-  // V-5: shutter/door require at least one hinge
+  // V-5: shutter/door require at least one hinge; a double shutter is hinged
+  // per shutter leaf (front = glass side, back = jali side)
   if (rt === 'shutter' || rt === 'door') {
     const hasHinge = hardware.some((hw) => hw.hardwareType === 'hinge')
     if (!hasHinge) {
       issues.push({ id: region.id, message: `${rt} ${label} needs at least one hinge` })
+    } else if (isDoubleShutter) {
+      const frontHinge = hardware.some((hw) => hw.hardwareType === 'hinge' && hw.side !== 'back')
+      const backHinge = hardware.some((hw) => hw.hardwareType === 'hinge' && hw.side === 'back')
+      if (!frontHinge || !backHinge) {
+        issues.push({ id: region.id, message: `Double shutter ${label} needs a hinge on each side (glass + jali)` })
+      }
     }
   }
 
@@ -53,10 +78,10 @@ function pushLeafIssues(region, issues) {
     issues.push({ id: region.id, message: `Lock on ${rt} ${label} — locks are door-only` })
   }
 
-  // V-16: back-side hardware requires a double-rebate door
+  // V-16: back-side hardware requires a double-rebate door or a double shutter
   const hasBack = hardware.some((hw) => hw.side === 'back')
-  if (hasBack && !(rt === 'door' && region.rebate === 'double')) {
-    issues.push({ id: region.id, message: `Back-side hardware on ${label} needs a double-rebate door` })
+  if (hasBack && !(rt === 'door' && region.rebate === 'double') && !isDoubleShutter) {
+    issues.push({ id: region.id, message: `Back-side hardware on ${label} needs a double-rebate door or double shutter` })
   }
 
   // V-17: doorHand / rebate are meaningful only on door regions

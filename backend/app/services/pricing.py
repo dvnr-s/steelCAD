@@ -236,12 +236,34 @@ def _compute_split_costs(splits: list[dict], rate: float) -> list[dict]:
     return items
 
 
-# ─── Pane structure cost (§5.2) ────────────────────────────────────
+# ─── Pane structure cost (§5.2, §5.7) ──────────────────────────────
+
+def _is_double_shutter(region: dict) -> bool:
+    """True for a shutter region double-shuttered per §5.7 (glass + jali leaves)."""
+    ps = region.get("paneSpec") or {}
+    return region.get("regionType") == "shutter" and ps.get("shutterConfig") == "double"
+
+
+def _pane_item(mat: str, rf: float, rates: RateDict, label: str) -> dict:
+    """One structural pane line item: rf × shutter material rate."""
+    rate = _lookup_rate(f"SHUTTER_{mat}", rates)
+    cost = _round2(rf * rate)
+    mat_label = "MS Pipe" if mat == "MS_PIPE" else "GP Sheet"
+    return {
+        "label": f"{label} ({mat_label})",
+        "description": f"{label} {rf} RFT × ₹{rate}/RFT",
+        "quantity": rf,
+        "unit": "RFT",
+        "rate": rate,
+        "cost": cost,
+    }
+
 
 def _compute_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
     """
     Structural pane cost — `shutter` regions only.
     pane_RF = 2 × (width + height), cost = pane_RF × shutter_material_rate.
+    On a double shutter (§5.7) this is the GLASS-side leaf.
 
     `door` regions have NO structural pane (§4A.2): a door leaf is not priced
     separately — the chowkhat frame's 3-sided running feet (§4A.1) carries the
@@ -261,19 +283,25 @@ def _compute_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
 
     w, h = region["width"], region["height"]
     rf = _round2(2 * (w + h))
-    rate = _lookup_rate(f"SHUTTER_{mat}", rates)
-    cost = _round2(rf * rate)
+    label = "Shutter pane — glass side" if _is_double_shutter(region) else "Shutter pane"
+    return _pane_item(mat, rf, rates, label)
 
-    mat_label = "MS Pipe" if mat == "MS_PIPE" else "GP Sheet"
 
-    return {
-        "label": f"Shutter pane ({mat_label})",
-        "description": f"Shutter pane {rf} RFT × ₹{rate}/RFT",
-        "quantity": rf,
-        "unit": "RFT",
-        "rate": rate,
-        "cost": cost,
-    }
+def _compute_jali_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
+    """
+    Jali-side structural pane of a double shutter (§5.7) — a second, fully-priced
+    leaf: pane_RF × jali-side material rate (P-14).
+    """
+    if not _is_double_shutter(region):
+        return None
+
+    mat = (region.get("paneSpec") or {}).get("jaliMaterial")
+    if not mat:
+        return None
+
+    w, h = region["width"], region["height"]
+    rf = _round2(2 * (w + h))
+    return _pane_item(mat, rf, rates, "Shutter pane — jali side")
 
 
 # ─── Infill cost (§5.3) ───────────────────────────────────────────
@@ -282,12 +310,13 @@ def _compute_infill(region: dict, rates: RateDict) -> Optional[dict]:
     """
     Infill cost: glass = ₹0 (no line item needed), jali = area-based.
     Jali cost is ADDITIONAL to pane structure cost — never replaces it (P-7).
+    The jali side of a double shutter always carries mesh (§5.7 / P-15).
     """
     ps = region.get("paneSpec")
     if not ps:
         return None
 
-    if ps.get("infillType") != "jali":
+    if ps.get("infillType") != "jali" and not _is_double_shutter(region):
         return None  # glass = ₹0, no line item
 
     w, h = region["width"], region["height"]
@@ -309,24 +338,32 @@ def _compute_infill(region: dict, rates: RateDict) -> Optional[dict]:
 
 def _compute_beading(region: dict, rates: RateDict) -> Optional[dict]:
     """
-    Beading cost = perimeter × beading rate.
+    Beading cost = perimeter × beading rate, one 2×(w+h) run per beaded side.
     Applies to BOTH glass and jali panes (P-8). Requires infill (P-9, V-13).
+    A double shutter (§5.7) beads each side independently (P-16): `hasBeading`
+    is the glass side, `jaliBeading` the jali side.
     """
     ps = region.get("paneSpec")
-    if not ps or not ps.get("hasBeading"):
+    if not ps:
         return None
 
-    if ps.get("infillType", "none") == "none":
-        return None  # V-13: beading requires infill
+    if _is_double_shutter(region):
+        sides = int(bool(ps.get("hasBeading"))) + int(bool(ps.get("jaliBeading")))
+    else:
+        sides = 1 if ps.get("hasBeading") and ps.get("infillType", "none") != "none" else 0
+
+    if sides == 0:
+        return None
 
     w, h = region["width"], region["height"]
-    rf = _round2(2 * (w + h))
+    rf = _round2(sides * 2 * (w + h))
     rate = _lookup_rate("GLASS_BEADING", rates)
     cost = _round2(rf * rate)
+    note = " (both sides)" if sides == 2 else ""
 
     return {
         "label": "Beading",
-        "description": f"Beading {rf} RFT × ₹{rate}/RFT",
+        "description": f"Beading {rf} RFT × ₹{rate}/RFT{note}",
         "quantity": rf,
         "unit": "RFT",
         "rate": rate,
@@ -444,6 +481,7 @@ def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dic
         "region_type": rt or "branch",
         "dimensions": f"{_fmt_ft(h)}ft × {_fmt_ft(w)}ft",
         "pane_structure": None,
+        "pane_structure_2": None,
         "infill": None,
         "beading": None,
         "grill": None,
@@ -462,6 +500,11 @@ def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dic
         if pane:
             region_bd["pane_structure"] = pane
             sub += pane["cost"]
+
+        pane2 = _compute_jali_pane_structure(region, rates)
+        if pane2:
+            region_bd["pane_structure_2"] = pane2
+            sub += pane2["cost"]
 
         infill = _compute_infill(region, rates)
         if infill:

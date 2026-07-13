@@ -113,6 +113,20 @@ Rules worth memorizing:
 - Beading needs infill — you can't bead an empty pane (P-9, V-13).
 - `door` regions have **no pane at all** (`paneSpec: null`) (P-12, V-18).
 
+### Double shuttering (spec §5.7)
+
+A `shutter` region can be shuttered on **both faces of the frame** — a glass shutter on
+one side and a jali shutter on the other (`paneSpec.shutterConfig: "double"`; default
+`"single"`). It stays a single leaf region; the second leaf is expressed in the pane spec:
+
+- Glass side: `shutterMaterial` + `hasBeading` (infill stays `"glass"` while double).
+- Jali side: `jaliMaterial` + `jaliBeading`; the jali mesh area cost always applies.
+- **Both** structural panes are fully priced at their own material rates (P-14) —
+  the breakdown carries a second slot, `pane_structure_2`.
+- Each shutter is hinged independently (HW-9): `side: "front"` = glass shutter,
+  `side: "back"` = jali shutter (the same `side` field double-rebate doors use), and
+  each side needs at least one hinge (V-5). Only shutters can be double (V-19).
+
 ---
 
 ## 5. Grills: two completely different models

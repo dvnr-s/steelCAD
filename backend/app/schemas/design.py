@@ -15,10 +15,18 @@ from pydantic import BaseModel, Field
 # ─── Pane, Overlay, Hardware sub-schemas ────────────────────────────
 
 class PaneSpec(BaseModel):
-    """Layered pane specification (spec §5)."""
+    """Layered pane specification (spec §5).
+
+    `shutterConfig: "double"` (§5.7) puts two independent shutter leaves on the
+    opening — a glass shutter (shutterMaterial/hasBeading) on one face of the
+    frame and a jali shutter (jaliMaterial/jaliBeading) on the other.
+    """
+    shutterConfig: Literal["single", "double"] = "single"
     shutterMaterial: Optional[Literal["MS_PIPE", "GP_SHEET"]] = None
     infillType: Literal["none", "glass", "jali"] = "none"
     hasBeading: bool = False
+    jaliMaterial: Optional[Literal["MS_PIPE", "GP_SHEET"]] = None
+    jaliBeading: bool = False
 
 
 class GrillOverlay(BaseModel):

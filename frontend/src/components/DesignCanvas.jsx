@@ -17,7 +17,7 @@ import { Minus, Plus, Maximize2 } from 'lucide-react'
 import useEditorStore, { snapOffset, MIN_SIDE } from '../store/editorStore'
 import { dimLabel } from '../lib/format'
 import {
-  ACTUAL_SCALE, FIT_PAD, fitScale, collect, regionFill, regionStroke,
+  ACTUAL_SCALE, FIT_PAD, fitScale, collect, regionFill, regionStroke, regionTag,
   DoorSwing, ConcreteBase, VoidHatch, GrillOverlay,
 } from '../lib/canvasDraw'
 
@@ -62,9 +62,9 @@ export default function DesignCanvas({ width, height }) {
   const panRef = useRef(null)        // active pan gesture state
   const initedRef = useRef(null)     // design id the view was initialized for
 
-  // Initialize the view fit-to-viewport but never larger than true size (100% =
-  // 60px/ft): big frames shrink to fit, small frames stay at true size. Centered,
-  // once per design.
+  // Initialize the view fit-to-viewport (up to the zoom-in cap): the frame
+  // fills the available canvas, centered, once per design — and only once a
+  // real measurement arrives (width/height are 0 until the ResizeObserver fires).
   useEffect(() => {
     if (!tree || width < 2 || height < 2) return
     if (initedRef.current === tree.id) return
@@ -227,8 +227,8 @@ export default function DesignCanvas({ width, height }) {
                 onClick={() => { if (!addMode) select(region.id) }}
                 onTap={() => { if (!addMode) select(region.id) }}
               />
-              {region.isLeaf && region.regionType && region.regionType !== 'open' && (
-                <Text x={rx + 4} y={ry + 4} text={region.regionType.toUpperCase()} fontSize={9}
+              {region.isLeaf && regionTag(region) && (
+                <Text x={rx + 4} y={ry + 4} text={regionTag(region)} fontSize={9}
                   fill={regionStroke(region, selectedId)} fontFamily="JetBrains Mono, monospace" opacity={0.7} listening={false} />
               )}
               {rw > 40 && rh > 24 && (

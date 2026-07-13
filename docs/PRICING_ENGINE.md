@@ -134,20 +134,32 @@ cost     = pane_RFT × SHUTTER_{material}        # MS_PIPE=₹100, GP_SHEET=₹2
 `fixed`, `open`, `louver`, and `door` regions have **no** structural pane. (`door`
 specifically is priced by the frame, not the leaf — §4A.2.)
 
+A **double-shuttered** region (§5.7, `paneSpec.shutterConfig: "double"` — a glass
+shutter on one face of the frame, a jali shutter on the other) prices a **second**
+full pane run at the jali side's own material rate
+(`_compute_jali_pane_structure` → the breakdown's `pane_structure_2` slot):
+```
+cost₂ = pane_RFT × SHUTTER_{jaliMaterial}
+```
+
 ### 5.2 Infill — jali only (`_compute_infill`)
 ```
 glass → ₹0 (a label, no line item)
 jali  → area = width × height;  cost = area × JALI_WIRE_MESH (₹110/sqft)
 ```
-Jali is **additional** to the structural pane, never a replacement.
+Jali is **additional** to the structural pane, never a replacement. The jali side of a
+double shutter **always** carries this mesh cost (P-15), even though its `infillType`
+reads `"glass"` (that field describes the glass side).
 
 ### 5.3 Beading — perimeter (`_compute_beading`)
 ```
 requires infill ≠ none (else skipped — V-13)
-rf   = 2 × (width + height)
+rf   = beaded_sides × 2 × (width + height)
 cost = rf × GLASS_BEADING (₹40/RFT)
 ```
-Applies to **both** glass and jali panes.
+Applies to **both** glass and jali panes. A single-shuttered region has at most one
+beaded side; a double shutter beads each side independently (`hasBeading` = glass side,
+`jaliBeading` = jali side) so `beaded_sides` can be 2.
 
 ### 5.4 Hardware — per piece (`_compute_hardware`)
 ```

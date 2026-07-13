@@ -188,9 +188,14 @@ Context-sensitive editors for the selected region, each writing back via `update
 - **Type** — `open`/`fixed`/`shutter`/`door`/`louver`; switching type resets dependent
   fields per spec §10.3.
 - **Pane** — shutter material, infill (none/glass/jali), beading (gated on infill).
+  Shutter regions get a **Shuttering** toggle (single / double, spec §5.7): double shows
+  per-side editors (glass-side material + beading, jali-side material + beading), forces
+  glass infill, and auto-adds a jali-side (`side: "back"`) hinge set; back to single
+  clears the jali fields and strips back-side hardware.
 - **Grill** — none / MS square (leaf only) / SS round / SS square.
 - **Hardware** — add/remove hinges and (door-only) locks; front/back groups for
-  double-rebate doors.
+  double-rebate doors ("Front side" / "Other side") and double shutters
+  ("Glass shutter" / "Jali shutter").
 - **Door options** — hand (left/right) and rebate (single/double).
 - **Add window to door** — guided helper to carve a side/top window off a door.
 - **Split** — direction + position to subdivide a leaf.
