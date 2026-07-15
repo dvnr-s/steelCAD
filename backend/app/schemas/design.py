@@ -22,7 +22,9 @@ class PaneSpec(BaseModel):
     frame and a jali shutter (jaliMaterial/jaliBeading) on the other.
     """
     shutterConfig: Literal["single", "double"] = "single"
-    shutterMaterial: Optional[Literal["MS_PIPE", "GP_SHEET"]] = None
+    # "HINGES_ONLY" (§5.8): customer-supplied shutter — we charge hinges only, no
+    # pane/infill/beading. UI label "No Shutter, only Hinges". Applies to the whole region.
+    shutterMaterial: Optional[Literal["MS_PIPE", "GP_SHEET", "HINGES_ONLY"]] = None
     infillType: Literal["none", "glass", "jali"] = "none"
     hasBeading: bool = False
     jaliMaterial: Optional[Literal["MS_PIPE", "GP_SHEET"]] = None
@@ -30,11 +32,17 @@ class PaneSpec(BaseModel):
 
 
 class GrillOverlay(BaseModel):
-    """Grill overlay on a region (spec §6). The ONLY overlay type."""
+    """Grill overlay on a region (spec §6). The ONLY overlay type.
+
+    `config` carries type-specific extras (§6.3): `is_continuity` for SS grills
+    on branch regions and the manual `barAdjust` bar-count delta (§6.2A,
+    bounds-checked by V-20 in services/validation.py).
+    """
     id: UUID
     type: Literal["overlay"] = "overlay"
     overlayType: Literal["grill"] = "grill"
     material: Literal["MS_SQUARE", "SS_PIPE_ROUND", "SS_PIPE_SQUARE"]
+    config: dict = Field(default_factory=dict)
 
 
 class Hardware(BaseModel):

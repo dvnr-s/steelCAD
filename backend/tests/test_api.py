@@ -348,6 +348,44 @@ class TestEstimateLifecycle:
         assert body["grand_total"] > 0           # re-priced
 
 
+# ── Frame thumbnails (schematic SVG per estimate frame) ───────────
+
+class TestFrameThumbnail:
+    async def test_frame_thumbnail_svg_and_304(self, client, db_session):
+        await create_user(db_session, "fthumb@test.com", role="sales")
+        h = auth_headers(await login(client, "fthumb@test.com"))
+        await seed_rates(db_session)
+        cust = (await client.post("/customers", headers=h, json={"name": "Thumb Co"})).json()["id"]
+        design_id = (await client.post("/designs", headers=h,
+                                       json=make_design_payload("Thumb Frame"))).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()
+        est = (await client.post(f"/estimates/{est['id']}/frames", headers=h,
+                                 json={"source_design_id": design_id, "quantity": 1})).json()
+        fid = est["frames"][0]["id"]
+
+        r = await client.get(f"/estimates/{est['id']}/frames/{fid}/thumbnail.svg", headers=h)
+        assert r.status_code == 200
+        assert r.headers["content-type"].startswith("image/svg+xml")
+        assert r.text.lstrip().startswith("<svg")
+        etag = r.headers["etag"]
+
+        # Revalidation with the same ETag → 304, no body.
+        r304 = await client.get(f"/estimates/{est['id']}/frames/{fid}/thumbnail.svg",
+                                headers={**h, "If-None-Match": etag})
+        assert r304.status_code == 304
+        assert not r304.content
+
+    async def test_frame_thumbnail_404(self, client, db_session):
+        await create_user(db_session, "fthumb404@test.com", role="sales")
+        h = auth_headers(await login(client, "fthumb404@test.com"))
+        await seed_rates(db_session)
+        cust = (await client.post("/customers", headers=h, json={"name": "Thumb404 Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()
+        assert (await client.get(
+            f"/estimates/{est['id']}/frames/{uuid4()}/thumbnail.svg", headers=h,
+        )).status_code == 404
+
+
 # ── Other charges (PR-9 — labor / transport / installation) ───────
 
 class TestOtherCharges:
@@ -953,6 +991,35 @@ class TestPdfRateLimit:
             limiter.enabled = False
         assert codes[:10] == [200] * 10
         assert codes[10] == 429
+
+
+# ── Customer-facing PDF ────────────────────────────────────────────
+
+class TestCustomerPdf:
+    async def test_customer_pdf_download(self, client, db_session, monkeypatch):
+        """The customer endpoint serves a PDF under a 'Quotation' filename.
+        The renderer is mocked — WeasyPrint needs GTK, unavailable on Windows CI."""
+        from app.routers import estimates as estimates_router
+        monkeypatch.setattr(estimates_router, "generate_customer_estimate_pdf",
+                            lambda estimate, company: b"%PDF-1.4 fake")
+
+        await create_user(db_session, "cust_pdf@test.com", role="sales")
+        h = auth_headers(await login(client, "cust_pdf@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "PDF Co"})).json()["id"]
+        eid = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()["id"]
+
+        resp = await client.get(f"/estimates/{eid}/pdf/customer", headers=h)
+        assert resp.status_code == 200
+        assert resp.headers["content-type"] == "application/pdf"
+        assert "SteelCAD_Quotation_EST-" in resp.headers["content-disposition"]
+
+    async def test_customer_pdf_404_on_deleted(self, client, db_session):
+        await create_user(db_session, "cust_pdf404@test.com", role="owner")
+        h = auth_headers(await login(client, "cust_pdf404@test.com"))
+        cust = (await client.post("/customers", headers=h, json={"name": "B Co"})).json()["id"]
+        est = (await client.post(f"/customers/{cust}/estimates", headers=h, json={"title": "Q"})).json()["id"]
+        await client.delete(f"/estimates/{est}", headers=h)
+        assert (await client.get(f"/estimates/{est}/pdf/customer", headers=h)).status_code == 404
 
 
 # ── Health endpoints ───────────────────────────────────────────────

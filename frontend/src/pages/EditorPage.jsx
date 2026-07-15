@@ -4,10 +4,11 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Save, Check, Undo2, Redo2, AlertTriangle, CheckCircle2, SeparatorVertical, SeparatorHorizontal, MousePointer2, HelpCircle } from 'lucide-react'
+import { ArrowLeft, Save, Check, Undo2, Redo2, AlertTriangle, CheckCircle2, SeparatorVertical, SeparatorHorizontal, MousePointer2, HelpCircle, Ruler, BookmarkPlus } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useEditorStore, { listLeafIds } from '../store/editorStore'
 import { designsApi, estimatesApi, pricePreview } from '../api/client'
+import { fmtFtIn } from '../lib/format'
 import { validateTree } from '../lib/validators'
 import { useConfirm } from '../components/ConfirmModal'
 import DesignCanvas from '../components/DesignCanvas'
@@ -182,9 +183,16 @@ export default function EditorPage() {
   const selectedId = useEditorStore((s) => s.selectedId)
   const copyRegion = useEditorStore((s) => s.copyRegion)
   const pasteOnto = useEditorStore((s) => s.pasteOnto)
+  const pasteOntoAllSimilar = useEditorStore((s) => s.pasteOntoAllSimilar)
+  const showDims = useEditorStore((s) => s.showDims)
+  const toggleDims = useEditorStore((s) => s.toggleDims)
 
   const [loading, setLoading] = useState(!!id || frameMode)
   const [saving, setSaving] = useState(false)
+  const [savingToLibrary, setSavingToLibrary] = useState(false)
+  // Estimate frames belonging to a non-draft estimate are locked server-side;
+  // knowing it here keeps autosave from firing doomed writes.
+  const [frameLocked, setFrameLocked] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   // Pricing fetch failed — the displayed price no longer matches the tree.
   const [priceStale, setPriceStale] = useState(false)
@@ -222,6 +230,7 @@ export default function EditorPage() {
         .then(({ data }) => {
           const frame = data.frames.find((f) => f.id === frameId)
           if (!frame) throw new Error('not found')
+          setFrameLocked(data.status !== 'draft')
           initTree(frame.id, frame.tree_json)
         })
         .catch(() => {
@@ -244,11 +253,86 @@ export default function EditorPage() {
       .finally(() => setLoading(false))
   }, [id, frameId, estimateId])
 
-  // Keyboard shortcuts — Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or Ctrl+Y redo.
-  // Tab / Shift+Tab / arrows cycle canvas region selection (keyboard access —
-  // Konva shapes aren't focusable).
+  // Warn on browser-level navigation (refresh / close / hard nav) with unsaved edits.
+  useEffect(() => {
+    if (!isDirty) return
+    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [isDirty])
+
+  // Refresh live unit price whenever tree changes (debounced).
+  // On failure keep the last known price but flag it stale.
+  const refreshPrice = useCallback(async () => {
+    try {
+      const { data } = await pricePreview(useEditorStore.getState().tree)
+      setLivePrice(data)
+      setPriceStale(false)
+    } catch {
+      setPriceStale(true)
+    }
+  }, [setLivePrice])
+
+  const priceTimeout = useRef(null)
+  useEffect(() => {
+    if (!tree) return
+    clearTimeout(priceTimeout.current)
+    priceTimeout.current = setTimeout(refreshPrice, 600)
+    return () => clearTimeout(priceTimeout.current)
+  }, [tree, refreshPrice])
+
+  const handleSave = useCallback(async (opts = {}) => {
+    const silent = opts.silent === true
+    if (!tree) return
+    if (issues.length > 0) {
+      if (!silent) toast.error(`Fix ${issues.length} issue${issues.length > 1 ? 's' : ''} before saving`)
+      return
+    }
+    // Edits can land while the request is in flight — only mark clean if the
+    // tree is still the one we sent (otherwise the next autosave picks it up).
+    const treeAtSave = tree
+    setSaving(true)
+    try {
+      if (frameMode) {
+        await estimatesApi.updateFrame(estimateId, frameId, { name: designName, tree_json: treeAtSave })
+        if (useEditorStore.getState().tree === treeAtSave) markSaved(frameId)
+        if (!silent) toast.success('Frame saved')
+      } else if (designId) {
+        await designsApi.update(designId, { name: designName, tree_json: treeAtSave })
+        if (useEditorStore.getState().tree === treeAtSave) markSaved(designId)
+        if (!silent) toast.success('Design saved')
+      }
+    } catch (err) {
+      const detail = err.response?.data?.detail
+      if (detail?.validation_errors) {
+        toast.error(`Validation: ${detail.validation_errors[0]}`)
+      } else {
+        toast.error('Save failed')
+      }
+    } finally {
+      setSaving(false)
+    }
+  }, [tree, issues, frameMode, estimateId, frameId, designId, designName, markSaved])
+
+  // #8 Autosave (estimate frames only): 1.5s after the last edit, when the
+  // tree is valid and the estimate isn't locked. Library designs stay manual.
+  useEffect(() => {
+    if (!frameMode || frameLocked || !isDirty || saving || issues.length > 0) return undefined
+    const t = setTimeout(() => handleSave({ silent: true }), 1500)
+    return () => clearTimeout(t)
+  }, [frameMode, frameLocked, isDirty, saving, issues, handleSave])
+
+  // Keyboard shortcuts — Ctrl/Cmd+S save, Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z or
+  // Ctrl+Y redo. Tab / Shift+Tab / arrows cycle canvas region selection
+  // (keyboard access — Konva shapes aren't focusable).
   useEffect(() => {
     const onKeyDown = (e) => {
+      // Ctrl+S works even while typing in a form field (browsers hijack it otherwise).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        handleSave()
+        return
+      }
       // Don't hijack typing in form fields.
       const tag = e.target?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
@@ -282,68 +366,41 @@ export default function EditorPage() {
         redo()
       } else if (key === 'c' && selectedId) {
         if (copyRegion(selectedId)) { e.preventDefault(); toast.success('Region copied') }
+      } else if (key === 'v' && e.shiftKey) {
+        const n = pasteOntoAllSimilar()
+        if (n > 0) { e.preventDefault(); toast.success(`Applied to ${n} region${n > 1 ? 's' : ''}`) }
       } else if (key === 'v' && selectedId) {
         if (pasteOnto(selectedId)) { e.preventDefault(); toast.success('Pasted onto region') }
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [undo, redo, setAddMode, selectedId, copyRegion, pasteOnto])
+  }, [undo, redo, setAddMode, selectedId, copyRegion, pasteOnto, pasteOntoAllSimilar, handleSave])
 
-  // Warn on browser-level navigation (refresh / close / hard nav) with unsaved edits.
-  useEffect(() => {
-    if (!isDirty) return
-    const onBeforeUnload = (e) => { e.preventDefault(); e.returnValue = '' }
-    window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
-  }, [isDirty])
-
-  // Refresh live unit price whenever tree changes (debounced).
-  // On failure keep the last known price but flag it stale.
-  const refreshPrice = useCallback(async () => {
-    try {
-      const { data } = await pricePreview(useEditorStore.getState().tree)
-      setLivePrice(data)
-      setPriceStale(false)
-    } catch {
-      setPriceStale(true)
-    }
-  }, [setLivePrice])
-
-  const priceTimeout = useRef(null)
-  useEffect(() => {
-    if (!tree) return
-    clearTimeout(priceTimeout.current)
-    priceTimeout.current = setTimeout(refreshPrice, 600)
-    return () => clearTimeout(priceTimeout.current)
-  }, [tree, refreshPrice])
-
-  const handleSave = async () => {
+  // #7 Save an estimate frame back to the reusable design library (a copy —
+  // future edits to either side stay independent).
+  const saveToLibrary = async () => {
     if (!tree) return
     if (issues.length > 0) {
-      toast.error(`Fix ${issues.length} issue${issues.length > 1 ? 's' : ''} before saving`)
+      toast.error(`Fix ${issues.length} issue${issues.length > 1 ? 's' : ''} first`)
       return
     }
-    setSaving(true)
+    setSavingToLibrary(true)
     try {
-      if (frameMode) {
-        await estimatesApi.updateFrame(estimateId, frameId, { name: designName, tree_json: tree })
-        markSaved(frameId)
-        toast.success('Frame saved')
-      } else if (designId) {
-        await designsApi.update(designId, { name: designName, tree_json: tree })
-        markSaved(designId)
-        toast.success('Design saved')
-      }
-    } catch (err) {
-      const detail = err.response?.data?.detail
-      if (detail?.validation_errors) {
-        toast.error(`Validation: ${detail.validation_errors[0]}`)
-      } else {
-        toast.error('Save failed')
-      }
+      await designsApi.create({
+        name: designName,
+        productType: tree.productType || 'window',
+        outerWidth: tree.outerWidth,
+        outerHeight: tree.outerHeight,
+        sectionSize: tree.sectionSize,
+        gauge: tree.gauge,
+        tree_json: tree,
+      })
+      toast.success(`Saved "${designName}" to the design library`)
+    } catch {
+      toast.error('Failed to save to library')
     } finally {
-      setSaving(false)
+      setSavingToLibrary(false)
     }
   }
 
@@ -380,10 +437,12 @@ export default function EditorPage() {
           <div className="card modal-card" style={{ '--modal-w': '380px', padding: 24 }} onClick={(e) => e.stopPropagation()}>
             <h3 style={{ marginTop: 0, marginBottom: 14 }}>Keyboard shortcuts</h3>
             {[
+              ['Ctrl/⌘ + S', 'Save'],
               ['Ctrl/⌘ + Z', 'Undo'],
               ['Ctrl/⌘ + Shift + Z / Y', 'Redo'],
               ['Ctrl/⌘ + C', 'Copy selected region'],
               ['Ctrl/⌘ + V', 'Paste onto selected region'],
+              ['Ctrl/⌘ + Shift + V', 'Apply copied spec to all similar regions'],
               ['Esc', 'Cancel tool / close'],
               ['?', 'Toggle this help'],
             ].map(([k, d]) => (
@@ -457,10 +516,22 @@ export default function EditorPage() {
         </div>
 
         <div className="flex gap-2">
+          {frameMode && (
+            <button
+              className="btn btn-secondary btn-sm"
+              onClick={saveToLibrary}
+              disabled={savingToLibrary}
+              title="Save a copy of this frame as a reusable library design"
+            >
+              {savingToLibrary ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <BookmarkPlus size={14} />}
+              Save to Library
+            </button>
+          )}
           <button
             className="btn btn-secondary btn-sm"
             onClick={handleSave}
             disabled={saving || !isDirty}
+            title="Save (Ctrl+S)"
           >
             {saving ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Save size={14} />}
             Save
@@ -502,9 +573,10 @@ export default function EditorPage() {
           <div className="panel-title">Canvas</div>
           <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-muted)', lineHeight: 1.6 }}>
             <strong>Drag</strong> a mullion to reposition (snaps to 3").<br />
+            <strong>Click</strong> a mullion, then a blue size label, to type an exact position.<br />
             <strong>Double-click</strong> a mullion to remove it.<br />
             Use the <strong>V/H-Mullion</strong> tools to add splits.<br />
-            Drag the blue <strong>frame handles</strong> to resize.<br />
+            Drag the blue <strong>frame handles</strong> to resize — or click the frame size labels to type.<br />
             Click a region to edit type, pane, grill, hardware.
           </div>
         </div>
@@ -513,7 +585,7 @@ export default function EditorPage() {
           <div className="panel-section">
             <div className="panel-title">Size</div>
             <div style={{ fontSize: '0.875rem', fontFamily: 'var(--font-mono)', color: 'var(--c-text)' }}>
-              {tree.outerWidth}ft × {tree.outerHeight}ft<br />
+              {fmtFtIn(tree.outerWidth)} × {fmtFtIn(tree.outerHeight)}<br />
               <span style={{ color: 'var(--c-text-muted)', fontSize: '0.8125rem' }}>
                 Section {tree.sectionSize}" {tree.gauge}
               </span>
@@ -594,6 +666,13 @@ export default function EditorPage() {
             title="Add horizontal mullion — click a panel to place"
           >
             <SeparatorHorizontal size={15} /> H-Mullion
+          </button>
+          <button
+            className={`btn btn-sm ${showDims ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={toggleDims}
+            title="Show / hide region dimension labels"
+          >
+            <Ruler size={15} /> Dims
           </button>
         </div>
 

@@ -111,13 +111,20 @@ shutterConfig   : "single" | "double"             — shutter regions only; defa
                                                     "double" = two independent shutter leaves on the
                                                     same opening: a glass shutter on one face of the
                                                     frame and a jali shutter on the other (§5.7)
-shutterMaterial : "MS_PIPE" | "GP_SHEET" | null  — shutter regions only; in a double shutter this
-                                                    is the GLASS-side shutter's material
+shutterMaterial : "MS_PIPE" | "GP_SHEET"          — shutter regions only; in a double shutter this
+                | "HINGES_ONLY" | null              is the GLASS-side shutter's material.
+                                                    "HINGES_ONLY" (customer-supplied shutter, UI
+                                                    label "No Shutter, only Hinges") means WE do not
+                                                    fabricate the shutter — the customer supplies it;
+                                                    we charge hinges only, no pane/infill/beading
+                                                    (§5.8, P-17). It applies to the whole region.
 infillType      : "none" | "glass" | "jali"      — what fills the pane; a double shutter is always
-                                                    "glass" (the jali side is implied — §5.7)
+                                                    "glass" (the jali side is implied — §5.7), EXCEPT
+                                                    a HINGES_ONLY shutter which is always "none" (§5.8)
 hasBeading      : boolean                         — optional add-on (applicable to glass OR jali);
                                                     in a double shutter: beading on the glass side
 jaliMaterial    : "MS_PIPE" | "GP_SHEET" | null  — double shutter only: jali-side shutter's material
+                                                    (null when the shutter is HINGES_ONLY — §5.8)
 jaliBeading     : boolean                         — double shutter only: beading on the jali side
 ```
 
@@ -351,7 +358,7 @@ Pane = Structural Pane Cost + Infill Specification + Optional Beading
 
 | Layer | What it is | Pricing | Applies to |
 |-------|-----------|---------|------------|
-| **Structural pane** | The physical shutter/pane frame itself | RF-based: `pane_RF × shutter_material_rate` | `shutter` regions only (door regions have NO pane — §4A.2) |
+| **Structural pane** | The physical shutter/pane frame itself | RF-based: `pane_RF × shutter_material_rate` | `shutter` regions only (door regions have NO pane — §4A.2; a `HINGES_ONLY` shutter has none either — §5.8) |
 | **Infill** | What fills the pane opening | glass = ₹0; jali = area-based | `shutter` and `fixed` regions |
 | **Beading** | Edge trim around the infill | perimeter-based: `pane_perimeter × beading_rate` | Any region with infill (glass OR jali) |
 
@@ -369,6 +376,8 @@ pane_structure_cost = pane_RF × selected_shutter_material_rate
 - `door` regions do NOT have structural pane cost either — the door leaf is not
   priced separately (§4A.2); the chowkhat frame carries the door's steel.
 - The shutter material choice (`MS_PIPE` or `GP_SHEET`) is per-region.
+- A `HINGES_ONLY` shutter (customer-supplied — §5.8) has NO structural pane cost: the
+  customer fabricates the shutter, so we skip the pane RF entirely.
 
 ### 5.3 Infill Specification
 
@@ -414,6 +423,7 @@ pane_total =
 | `shutter` 3×4ft, MS_PIPE | jali | yes | ₹1,400 | 3×4×110 = ₹1,320 | ₹560 | ₹3,280 |
 | `shutter` 3×4ft, MS_PIPE | jali | no | ₹1,400 | ₹1,320 | ₹0 | ₹2,720 |
 | `shutter` 3×4ft, **double** (glass MS_PIPE + jali MS_PIPE), beading glass side only | glass + jali | glass side | ₹1,400 + ₹1,400 | ₹1,320 | ₹560 | ₹4,680 |
+| `shutter` 3×4ft, **HINGES_ONLY** (customer-supplied) | none | — | ₹0 | ₹0 | ₹0 | ₹0 (hinges only — §5.8) |
 | `fixed` 3×4ft | glass | yes | ₹0 | ₹0 | ₹560 | ₹560 |
 | `fixed` 3×4ft | jali | yes | ₹0 | ₹1,320 | ₹560 | ₹1,880 |
 
@@ -435,6 +445,7 @@ pane_total =
 - **P-14**: A double shutter is exactly one glass side + one jali side. The glass side is described by `shutterMaterial` / `infillType: "glass"` / `hasBeading`; the jali side by `jaliMaterial` / `jaliBeading`. Each side's structural pane is FULLY priced (`2 × (w + h) × its material rate`) — the second shutter is never free or discounted.
 - **P-15**: The jali side of a double shutter always carries the jali mesh cost (area-based; P-7 applies to that side).
 - **P-16**: Beading is per side: `hasBeading` beads the glass side, `jaliBeading` beads the jali side. Each beaded side is an independent `2 × (w + h)` run at the beading rate.
+- **P-17**: A `HINGES_ONLY` shutter (customer-supplied — §5.8) contributes NO pane structure, NO infill, and NO beading cost — on either side of a double. Its only cost is the hinges we supply (§7). `HINGES_ONLY` overrides every other pane-pricing rule for that region: P-3, P-7, P-8, P-14, P-15, and P-16 do not apply to it.
 
 ### 5.7 Double Shuttering (glass + jali)
 
@@ -453,9 +464,13 @@ A double shutter means **two independent shutter leaves on the same opening**:
 
 Rules:
 
-1. Only `shutter` regions may be double-shuttered (P-13). The only supported combination
-   is one glass side + one jali side (glass+glass or jali+jali doubles are NOT valid);
-   `infillType` stays `"glass"` while double.
+1. Only `shutter` regions may be double-shuttered (P-13). For a **fabricated** double
+   (`shutterMaterial` is `MS_PIPE`/`GP_SHEET`), the only supported combination is one
+   glass side + one jali side (glass+glass or jali+jali doubles are NOT valid);
+   `infillType` stays `"glass"` while double. A **customer-supplied** double
+   (`shutterMaterial: "HINGES_ONLY"`) is the exception — both leaves are customer-built,
+   so there is no glass/jali material, no infill, and no beading; the "double" only means
+   we hinge both faces (§5.8).
 2. Both structural panes are fully priced — pane cost is exactly the sum of the two
    sides' RF runs at their own material rates (P-14). The two sides may choose
    different materials (e.g. glass side GP_SHEET, jali side MS_PIPE).
@@ -476,6 +491,55 @@ beading (glass) : 2×(3+4) × 40  = ₹560
 hinges          : (2 + 2) × 120 = ₹480
                                   ─────
 region subtotal                   ₹5,160
+```
+
+### 5.8 Customer-Supplied Shutter (`HINGES_ONLY`)
+
+Sometimes the customer fabricates and installs the shutter leaf (or leaves) themselves,
+and we supply **only the hinges**. This is modeled by setting `shutterMaterial` to
+`HINGES_ONLY` on a `shutter` region (UI label: **"No Shutter, only Hinges"**).
+
+`HINGES_ONLY` is a fabrication-scope flag on the whole region, not a real material — it
+has no material rate. When set:
+
+- **No structural pane cost** — we don't build the shutter frame (overrides P-3).
+- **No infill cost** — the customer's shutter carries its own glass/jali; `infillType` is
+  forced to `"none"`.
+- **No beading cost** — `hasBeading` and `jaliBeading` are forced `false`.
+- **Hinges are the only cost** — auto-computed by window logic (R-4 / HW-2) exactly as for
+  a fabricated shutter, and priced normally (§7).
+
+**Single vs. double.** `shutterConfig` still applies:
+
+| Config | Meaning | Cost |
+|--------|---------|------|
+| `single` | Customer supplies one shutter; we hinge one face | front hinges only |
+| `double` | Customer supplies shutters on both faces; we hinge both | front + back hinges (HW-9) |
+
+A `HINGES_ONLY` double carries no `jaliMaterial` — both leaves are customer-built, so there
+is no per-side material to record. The `"double"` config exists purely to drive the
+back-side hinge set (P-17, V-21).
+
+**Worked example** — `shutter` 3ft × 4ft, `HINGES_ONLY`, single, 2 SS_12G hinges (height
+4ft ≤ 6ft → 2):
+
+```
+structural pane : —          (customer-supplied)
+infill          : —
+beading         : —
+hinges          : 2 × 120 = ₹240
+                           ─────
+region subtotal              ₹240
+```
+
+**Worked example** — same shutter, `HINGES_ONLY`, **double** (customer supplies both faces),
+2 + 2 SS_12G hinges:
+
+```
+panes / infill / beading : —   (both leaves customer-supplied)
+hinges (front + back)    : (2 + 2) × 120 = ₹480
+                                           ─────
+region subtotal                             ₹480
 ```
 
 ---
@@ -523,11 +587,43 @@ S.S. grill is a repeated-bar pattern. It is **NOT** area-based.
 
 **Bar-count formula:**
 ```
-number_of_grill_bars = (2 × grilled_region_height) − 2
+auto_bars            = max(0, round_half_up((2 × grilled_region_height) − 2))
+number_of_grill_bars = auto_bars + bar_adjust        # bar_adjust defaults to 0 (§6.2A)
 each bar runs across the grilled_region_width
-total_billable_RFT = number_of_grill_bars × grilled_region_width
-SS_grill_cost = total_billable_RFT × selected_SS_grill_rate_per_RFT
+total_billable_RFT   = number_of_grill_bars × grilled_region_width
+SS_grill_cost        = total_billable_RFT × selected_SS_grill_rate_per_RFT
 ```
+
+Bars are physical objects: the count is always a **whole number** (`round_half_up` =
+round to nearest, halves up — identical on client and server). A region too short to
+earn a bar (`height ≤ 1 ft` → `auto_bars = 0`) bills zero and **draws zero** — the
+canvas must never render decorative bars that are not billed.
+
+**Rendering rule (canvas + PDF diagram):** the billed bars are distributed **evenly
+across the grilled region's full height** — `gap = height / (bars + 1)`, bars at
+`gap × 1 … gap × bars` — so the pattern always fills the region with equal spacing
+and adapts automatically to the bar count (including manual adjustments, §6.2A).
+No fixed margins or hardcoded pitch. The number of bars drawn MUST equal the number
+of bars billed; a region that bills zero bars draws none.
+
+### 6.2A Manual bar adjustment (`bar_adjust`)
+
+Customers sometimes demand a denser or sparser grill than the house formula. Each SS
+grill overlay may carry a whole-number **delta** `bar_adjust` (default `0`) stored in
+the overlay's `config`:
+
+- Effective count = `auto_bars + bar_adjust`. The delta is **relative**: resizing the
+  region recomputes `auto_bars` and re-applies the delta, so the customer's density
+  preference survives geometry changes.
+- When `bar_adjust ≠ 0`, the effective count MUST satisfy
+  `1 ≤ bars ≤ floor(height × 6)` (at most one bar per 2″ of height). Out-of-range
+  states are **rejected by validation (V-20)** — never silently clamped, so the
+  billed count always equals what the user sees.
+- `bar_adjust` applies to **SS grills only** (MS grill is area-priced — no bar count).
+- The adjustment is preserved when switching between SS materials, when the region is
+  split (continuity) or merged, and is dropped with the overlay itself.
+- The UI must always display the effective count and flag it as adjusted
+  (e.g. `15 bars (auto 13, +2)`); customer-facing documents show only the final count.
 
 **Continuity rule:**
 - SS grill can attach to **any region — leaf OR branch**.
@@ -549,8 +645,8 @@ SS_grill_cost = total_billable_RFT × selected_SS_grill_rate_per_RFT
 
 | Material | Rate | Formula |
 |----------|------|---------|
-| S.S. Pipe Round | ₹90/RFT | ((2 × region.height) − 2) × region.width × 90 |
-| S.S. Pipe Square | ₹110/RFT | ((2 × region.height) − 2) × region.width × 110 |
+| S.S. Pipe Round | ₹90/RFT | (round(2 × h − 2) + bar_adjust) × region.width × 90 |
+| S.S. Pipe Square | ₹110/RFT | (round(2 × h − 2) + bar_adjust) × region.width × 110 |
 
 **Examples:**
 
@@ -581,6 +677,8 @@ attached_region_id   : uuid (the region this grill is on)
 grilled_region_width : number (feet, from the attached region)
 grilled_region_height: number (feet, from the attached region)
 is_continuity        : boolean (true if attached to a branch region)
+bar_adjust           : integer, default 0 — SS only; manual delta vs. the auto
+                       bar count (§6.2A). Stored in the overlay's `config` object.
 ```
 
 ---
@@ -672,9 +770,14 @@ function priceDesign(tree):
         if region.isLeaf:
             paneSpec = region.paneSpec
             
+            # A HINGES_ONLY shutter (§5.8) is customer-supplied: skip pane, infill, and
+            # beading entirely — hinges (§3a hardware, below) are its only cost (P-17).
+            hingesOnly = region.regionType == "shutter" and paneSpec
+                         and paneSpec.shutterMaterial == "HINGES_ONLY"
+
             # Structural pane cost — shutter regions only.
             # door regions have NO pane (§4A.2); their steel is the chowkhat frame.
-            if region.regionType == "shutter" and paneSpec:
+            if region.regionType == "shutter" and paneSpec and not hingesOnly:
                 paneRF = 2 × (region.width + region.height)
                 paneRate = lookupShutterRate(paneSpec.shutterMaterial)
                 regionBreakdown.paneStructure = paneRF × paneRate
@@ -683,12 +786,13 @@ function priceDesign(tree):
                     regionBreakdown.paneStructure2 = paneRF × lookupShutterRate(paneSpec.jaliMaterial)
             
             # Infill cost — the jali side of a double shutter always carries mesh (§5.7)
-            if paneSpec and (paneSpec.infillType == "jali" or paneSpec.shutterConfig == "double"):
+            if paneSpec and not hingesOnly and (paneSpec.infillType == "jali" or paneSpec.shutterConfig == "double"):
                 regionBreakdown.infill = region.width × region.height × lookupRate("JALI_WIRE_MESH")
             # glass infill = ₹0, no line item needed
             
             # Beading cost — one 2×(w+h) run per beaded side (a double shutter can bead both, P-16)
-            beadedSides = (1 if paneSpec and paneSpec.hasBeading else 0)
+            beadedSides = 0 if hingesOnly else
+                          (1 if paneSpec and paneSpec.hasBeading else 0)
                         + (1 if paneSpec and paneSpec.shutterConfig == "double" and paneSpec.jaliBeading else 0)
             if beadedSides > 0:
                 beadingRF = beadedSides × 2 × (region.width + region.height)
@@ -706,8 +810,8 @@ function priceDesign(tree):
                 # MS grill: area-based (leaf only, enforced by invariants)
                 cost = region.width × region.height × lookupRate("GRILL_MS_SQUARE")
             else:
-                # SS grill: bar-count (leaf or branch)
-                bars = (2 × region.height) − 2
+                # SS grill: bar-count (leaf or branch), whole bars + manual delta (§6.2A)
+                bars = max(0, round_half_up((2 × region.height) − 2)) + overlay.bar_adjust
                 totalRFT = bars × region.width
                 cost = totalRFT × lookupRate(overlay.material)
             regionBreakdown.grill = { type: overlay.material, cost: cost }
@@ -739,6 +843,7 @@ Rates are resolved from a `RateConfig` table using a deterministic item code:
 | `SECTION_10_16G` | 270 | per RFT |
 | `SHUTTER_MS_PIPE` | 100 | per RFT |
 | `SHUTTER_GP_SHEET` | 250 | per RFT |
+| _(HINGES_ONLY — no rate; customer-supplied shutter has no pane cost, §5.8)_ | — | — |
 | `HINGE_SS_12G` | 120 | per piece |
 | `HINGE_SS_10G` | 260 | per piece |
 | `GRILL_MS_SQUARE` | 100 | per sqft |
@@ -797,7 +902,7 @@ advance 50% → ₹7,169 (rounded from 7,168.50).
 1. Region becomes a branch.
 2. Region's type, pane specification, and hardware are **cleared**.
 3. Grill overlay: MS grill is **REMOVED**.
-4. **Exception**: If the region has SS grill, the SS grill is **PRESERVED** as a continuity overlay on the now-branch region.
+4. **Exception**: If the region has SS grill, the SS grill is **PRESERVED** as a continuity overlay on the now-branch region (`is_continuity` becomes true; any `bar_adjust` is carried over).
 5. Two new child leaf regions are created with type = `open`.
 6. Split is rendered as a line on the canvas.
 7. Canvas updates immediately.
@@ -806,7 +911,10 @@ advance 50% → ₹7,169 (rounded from 7,168.50).
 1. The split's two child regions are **deleted** (and their subtrees recursively).
 2. The parent region becomes a leaf again.
 3. Parent region's type resets to `open`.
-4. If the branch had SS grill (continuity), it remains on the now-leaf region.
+4. If the branch had SS grill (continuity), it remains on the now-leaf region
+   (`is_continuity` becomes false; any `bar_adjust` is carried over). The retained
+   grill is removed later only if the user assigns the leaf an `open`/`louver`/`door`
+   type (§10.3 step 5).
 5. User must re-assign type, pane specification, and other properties.
 
 ### 10.3 User changes a region's type
@@ -814,7 +922,11 @@ advance 50% → ₹7,169 (rounded from 7,168.50).
 2. If changing TO `shutter`: auto-add hinges (window hinge logic, R-4). Clear paneSpec, user must configure.
 3. If changing TO `door`: auto-add hinges (door hinge logic, R-5). paneSpec stays `null` and any grill overlay is removed — a door has no pane or grill (§4A.2). User sets hand / rebate / hardware.
 4. If changing FROM `shutter` or `door`: remove hinges and lock hardware. Clear paneSpec.
-5. Grill overlay is NOT affected by type change — it remains. **Exception:** a `door` region never keeps a grill (it is removed, per step 3).
+5. Grill overlay is kept **only when the new type is `fixed` or `shutter`**. Changing
+   to `open`, `louver`, or `door` removes the grill overlay (a void or louver carries
+   no grill; a door never does, §4A.2). The grill UI offers adding a grill only on
+   `fixed`/`shutter` leaves (and branches, SS-only) — but an existing grill on any
+   region stays removable.
 
 ### 10.4 User sets infill on a region
 1. Validate: region is a leaf with type `shutter` or `fixed`. (`door` regions do not have infill — P-12.)
@@ -825,12 +937,24 @@ advance 50% → ₹7,169 (rounded from 7,168.50).
 
 ### 10.4A User toggles double shuttering on a region
 1. Validate: region is a leaf with type `shutter` (P-13).
-2. Toggling to `double`: `infillType` is forced to `"glass"` (the jali side is implied);
-   the user selects the jali-side material (`jaliMaterial`); a jali-side hinge set is
-   auto-added with `side: "back"` (window hinge logic R-4, per HW-9).
+2. Toggling to `double` on a **fabricated** shutter (`MS_PIPE`/`GP_SHEET`): `infillType` is
+   forced to `"glass"` (the jali side is implied); the user selects the jali-side material
+   (`jaliMaterial`); a jali-side hinge set is auto-added with `side: "back"` (window hinge
+   logic R-4, per HW-9).
+   - On a **`HINGES_ONLY`** shutter (§5.8): `infillType` stays `"none"` and no `jaliMaterial`
+     is selected — only the `side: "back"` hinge set is auto-added.
 3. Toggling to `single`: `jaliMaterial` and `jaliBeading` are cleared; all `side: "back"`
    hardware is removed.
-4. Pricing updates (second pane run + jali mesh + per-side beading + per-side hinges).
+4. Pricing updates (fabricated: second pane run + jali mesh + per-side beading + per-side
+   hinges; `HINGES_ONLY`: per-side hinges only).
+
+### 10.4B User selects "No Shutter, only Hinges" (`HINGES_ONLY`) on a shutter (§5.8)
+1. Validate: region is a leaf with type `shutter`.
+2. `shutterMaterial` is set to `HINGES_ONLY`; `infillType` is forced to `"none"` and
+   `hasBeading`, `jaliBeading`, `jaliMaterial` are cleared (V-21). The infill/beading
+   editors are hidden.
+3. Existing hinges are kept; the shutter still requires at least one hinge (V-5).
+4. Pricing updates: pane/infill/beading drop to ₹0; hinges remain the only cost.
 
 ### 10.5 User toggles beading on a region
 1. Validate: region has infill (glass or jali). Reject if infillType = "none".
@@ -848,9 +972,19 @@ advance 50% → ₹7,169 (rounded from 7,168.50).
 1. Validate: region is a leaf OR a branch. Both are valid for SS grill.
 2. Validate: no existing grill overlay on this region. If exists, replace or reject.
 3. User selects SS grill material (SS_PIPE_ROUND or SS_PIPE_SQUARE).
-4. An Overlay node (type=grill, material=selected, is_continuity=region.isBranch) is created.
+4. An Overlay node (type=grill, material=selected, is_continuity=region.isBranch, bar_adjust=0) is created.
 5. Canvas renders the horizontal bar pattern across the entire region (passing through internal splits if branch).
 6. Pricing updates: bar-count formula using the attached region's full dimensions.
+
+### 10.7A User adjusts the SS grill bar count (§6.2A)
+
+1. Available only on an SS grill overlay (leaf or branch). MS grill has no bar count.
+2. Stepper (−/+) changes `bar_adjust` by ±1; the UI shows the effective count and the
+   auto baseline (e.g. `15 bars (auto 13, +2)`) plus the resulting billable RFT.
+3. The effective count is kept within `1 … floor(height × 6)`; the stepper clamps
+   proactively and validation rejects out-of-range stored states (V-20).
+4. "Reset to auto" sets `bar_adjust` back to 0.
+5. Pricing and rendering update — drawn bars always equal billed bars.
 
 ### 10.8 User resizes the outer frame
 1. Frame dimensions update.
@@ -861,14 +995,19 @@ advance 50% → ₹7,169 (rounded from 7,168.50).
    divider inward rather than producing an invalid region).
 3. All descendant region dimensions **recompute** top-down from the new ratios.
 4. All pricing **recomputes** from new geometry (pane costs, infill costs, beading costs, grill costs).
-5. SS grill bar counts update based on new region heights.
+5. SS grill bar counts update based on new region heights (auto count recomputes,
+   `bar_adjust` re-applies — §6.2A).
+6. Hinge quantities with `autoComputed: true` on `shutter`/`door` leaves recompute
+   from the new leaf height (R-4/R-5). User-overridden quantities (`autoComputed:
+   false`) are preserved.
 
 ### 10.9 User drags a split to reposition it
 1. Split.position (ratio) updates.
 2. The two child regions resize accordingly.
 3. All descendant dimensions recompute.
 4. Pricing updates.
-5. SS grill costs on any ancestor region update (bar count may change if region height changed).
+5. SS grill costs on any ancestor region update (bar count may change if region height changed; `bar_adjust` re-applies).
+6. Auto-computed hinge quantities on affected `shutter`/`door` leaves recompute as in §10.8 step 6.
 
 ---
 
@@ -888,13 +1027,21 @@ The system MUST reject invalid states rather than guessing:
 - **V-9**: Grill overlays must have a valid material selected.
 - **V-10**: If grill placement is ambiguous, require the user to attach grill to a specific region. Never infer.
 - **V-11**: All splits must use the same section size and gauge as the Design root.
-- **V-12**: `shutter` regions must have a shutter material selected in paneSpec. (`door` regions have NO pane — see V-18.)
+- **V-12**: `shutter` regions must have a shutter material selected in paneSpec — `MS_PIPE`, `GP_SHEET`, or `HINGES_ONLY` (customer-supplied — §5.8). (`door` regions have NO pane — see V-18.)
 - **V-13**: Beading cannot be applied to a region with `infillType: "none"`.
 - **V-14**: Lock cannot be applied to `shutter` (window pane) regions. Only `door` regions.
 - **V-16**: `side: "back"` hardware is valid only on a `door` region whose `rebate` is `"double"` (§4A.6) or on a double-shuttered `shutter` region (§5.7, HW-9). A single-rebate door / single shutter has no back side.
 - **V-17**: `doorHand` and `rebate` are meaningful only on `door` regions. They are ignored (or rejected) on any other region type.
 - **V-18**: `door` regions carry hardware only — they must NOT have a shutter material, infill, beading (paneSpec is `null`), or any grill overlay (§4A.2).
-- **V-19**: `shutterConfig: "double"` is valid only on `shutter` regions (P-13). A double shutter MUST have a jali-side material (`jaliMaterial`) and its `infillType` MUST be `"glass"`. When `shutterConfig` is `"single"` (or absent), `jaliMaterial` and `jaliBeading` must not be set.
+- **V-19**: `shutterConfig: "double"` is valid only on `shutter` regions (P-13). A **fabricated** double shutter (`shutterMaterial` is `MS_PIPE`/`GP_SHEET`) MUST have a jali-side material (`jaliMaterial`) and its `infillType` MUST be `"glass"`. When `shutterConfig` is `"single"` (or absent), `jaliMaterial` and `jaliBeading` must not be set. A `HINGES_ONLY` double is exempt from the jali-material / glass-infill requirement — its constraints are given by V-21.
+- **V-20**: `bar_adjust` (§6.2A) must be a whole number and may only be set on SS grill
+  overlays. When non-zero, the effective bar count (`auto_bars + bar_adjust`) must be
+  ≥ 1 and ≤ `floor(height × 6)` (one bar per 2″ of region height). Out-of-range values
+  are rejected — never silently clamped.
+- **V-21**: A `HINGES_ONLY` shutter (customer-supplied — §5.8) must have `infillType: "none"`,
+  `hasBeading: false`, `jaliBeading: false`, and no `jaliMaterial` — the customer fabricates
+  the shutter(s), so we record no pane, infill, or beading. It still must satisfy V-5
+  (a `HINGES_ONLY` double needs a hinge on each side, HW-9).
 
 ---
 
@@ -1063,7 +1210,7 @@ These assumptions are made to remove ambiguity. If any are wrong, update this sp
 7. **Default new region type: `open`.** User must explicitly set type.
 8. **All splits use the same section/gauge as the Design root.** No per-split overrides. This matches actual fabrication.
 9. **M.S. grill is area-based.** Cost = region_area × rate/sqft. No bar-count logic.
-10. **S.S. grill is bar-count-based.** bars = (2 × height) − 2, RFT = bars × width, cost = RFT × rate. NOT area-based.
+10. **S.S. grill is bar-count-based.** bars = max(0, round(2 × height − 2)) + bar_adjust (whole bars, §6.2A), RFT = bars × width, cost = RFT × rate. NOT area-based. Drawn bars always equal billed bars.
 11. **S.S. grill supports continuity** through internal subdivisions. If the grill visually continues across child regions, use the enclosing region's full height for bar count.
 12. **Pane = structural pane + infill + beading.** These three layers are always separate. Never collapsed.
 13. **Glass has no material cost.** It is a label / infill state only. No glass-cost line item.
@@ -1072,7 +1219,7 @@ These assumptions are made to remove ambiguity. If any are wrong, update this sp
 16. **Window shutters have NO lock provision.** Lock is door-only.
 17. **Window shutter hinges:** ≤6ft → 2, ≤7ft → 3, ≤8ft → 4, >8ft → 5.
 18. **Door hinges:** ≤7ft → 3, ≤8ft → 4, >8ft → 5.
-19. **Shutter material is per-region.** Each shutter/door region independently chooses MS_PIPE or GP_SHEET.
+19. **Shutter material is per-region.** Each shutter region independently chooses MS_PIPE, GP_SHEET, or HINGES_ONLY (customer-supplied — §5.8).
 20. **Shutter perimeter** uses the leaf region's own dimensions: `2 × (width + height)`.
 21. **v1: Bay window extra** is modeled as a design-level flag/add-on with cost = `totalRF × 40` (where totalRF = frame perimeter + all split lengths). Note: bay window is physically a 3D construct — full 3D bay window modeling is planned for v2+.
 22. **One design = one frame.** Multi-frame designs are modeled as separate Design documents.
@@ -1082,6 +1229,7 @@ These assumptions are made to remove ambiguity. If any are wrong, update this sp
 26. **Rebate is price-neutral (§4A.5).** Single and double rebate cost the same; double rebate only permits `side: "back"` hardware.
 27. **Door hand is cosmetic (§4A.4).** `doorHand` (`left`/`right`) affects drawing only, never price.
 28. **Double shuttering (§5.7).** A `shutter` region may carry two independent shutter leaves — glass on one face of the frame, jali on the other. Both structural panes are fully priced at their own material rates, the jali side always carries mesh cost, beading is per side, and each shutter is hinged independently (`front` = glass side, `back` = jali side).
+29. **Customer-supplied shutter (§5.8).** A `shutter` region with `shutterMaterial: "HINGES_ONLY"` (UI: "No Shutter, only Hinges") is fabricated by the customer — we charge hinges only, no pane/infill/beading. `single` = one hinged face; `double` = hinges on both faces (no jali material). It overrides all other pane-pricing rules for that region (P-17, V-21).
 
 ---
 

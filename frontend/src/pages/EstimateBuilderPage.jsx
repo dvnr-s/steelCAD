@@ -1,10 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Plus, Trash2, Pencil, Download, X, LayoutGrid, SquarePen, AppWindow, DoorOpen, Lock, Copy } from 'lucide-react'
+import { ArrowLeft, Plus, Trash2, Pencil, Download, X, LayoutGrid, SquarePen, AppWindow, DoorOpen, Lock, Copy, Search } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { estimatesApi, designsApi } from '../api/client'
 import { makeEmptyTree } from '../store/editorStore'
+import { fmtFtIn } from '../lib/format'
 import TopNav from '../components/TopNav'
+import DimensionInput from '../components/DimensionInput'
+import useThumbnail from '../hooks/useThumbnail'
 import { useConfirm } from '../components/ConfirmModal'
 
 // Estimate lifecycle: only 'draft' is editable; the rest lock the estimate.
@@ -18,6 +21,23 @@ const STATUS_COLORS = {
 const money = (n) => `₹${Number(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 const rupee = (n) => `₹${Number(n).toLocaleString('en-IN')}`
 
+// Small server-rendered schematic. Placeholder box until the SVG loads.
+function Thumb({ path, alt, size = 54 }) {
+  const url = useThumbnail(path)
+  return (
+    <div style={{ width: size * 4 / 3, height: size, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#fff', border: '1px solid var(--c-border)', borderRadius: 'var(--radius)', overflow: 'hidden' }}>
+      {url ? (
+        <img src={url} alt={alt} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+      ) : (
+        <svg width={size / 2} height={size / 2.6} viewBox="0 0 40 26" fill="none">
+          <rect x="2" y="2" width="36" height="22" rx="2" stroke="var(--c-brand)" strokeWidth="1.5" opacity="0.5" />
+          <line x1="20" y1="2" x2="20" y2="24" stroke="var(--c-brand)" strokeWidth="1" opacity="0.3" />
+        </svg>
+      )}
+    </div>
+  )
+}
+
 // ─── Add-frame modal ────────────────────────────────────────────────
 function AddFrameModal({ estimateId, onClose, onAdded }) {
   const [tab, setTab] = useState('new')
@@ -26,6 +46,7 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
   // library
   const [designs, setDesigns] = useState([])
   const [loadingLib, setLoadingLib] = useState(true)
+  const [libQuery, setLibQuery] = useState('')
   // new frame
   const [form, setForm] = useState({ name: '', width: 5, height: 4, sectionSize: '5', gauge: '18G', productType: 'window' })
   const [quantity, setQuantity] = useState(1)
@@ -107,8 +128,14 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
               <input value={form.name} onChange={set('name')} placeholder={form.productType === 'door' ? 'e.g. Main Entrance Door' : 'e.g. Living Room Window'} autoFocus required />
             </div>
             <div className="flex gap-3">
-              <div className="form-group" style={{ flex: 1 }}><label>Width (ft)</label><input type="number" min="1" max="30" step="0.5" value={form.width} onChange={set('width')} /></div>
-              <div className="form-group" style={{ flex: 1 }}><label>Height (ft)</label><input type="number" min="1" max="20" step="0.5" value={form.height} onChange={set('height')} /></div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Width</label>
+                <DimensionInput value={form.width} onCommit={(v) => setForm((f) => ({ ...f, width: v }))} title={'Decimal feet or ft-in (e.g. 5\'6")'} />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Height</label>
+                <DimensionInput value={form.height} onCommit={(v) => setForm((f) => ({ ...f, height: v }))} title={'Decimal feet or ft-in (e.g. 4\'6")'} />
+              </div>
             </div>
             <div className="flex gap-3">
               <div className="form-group" style={{ flex: 1 }}>
@@ -125,26 +152,48 @@ function AddFrameModal({ estimateId, onClose, onAdded }) {
             </button>
           </form>
         ) : (
-          <div style={{ overflowY: 'auto' }}>
-            {loadingLib ? (
-              <div className="flex items-center justify-center" style={{ height: 120 }}><div className="spinner" /></div>
-            ) : designs.length === 0 ? (
-              <p className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No designs in the library yet.</p>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {designs.map((d) => (
-                  <button key={d.id} className="flex items-center justify-between" disabled={saving}
-                    onClick={() => addFromLibrary(d)}
-                    style={{ padding: '10px 12px', background: 'var(--c-surface-2)', border: '1px solid var(--c-border)', borderRadius: 'var(--radius)', cursor: 'pointer', textAlign: 'left' }}>
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{d.name}</div>
-                      <div className="text-xs text-muted">{d.outer_width}ft × {d.outer_height}ft · {d.section_size}" {d.gauge}</div>
-                    </div>
-                    <Plus size={16} color="var(--c-brand)" />
-                  </button>
-                ))}
-              </div>
-            )}
+          <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+            <div style={{ position: 'relative', marginBottom: 10 }}>
+              <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-text-muted)' }} />
+              <input
+                value={libQuery}
+                onChange={(e) => setLibQuery(e.target.value)}
+                placeholder="Search designs…"
+                autoFocus
+                style={{ width: '100%', paddingLeft: 30 }}
+              />
+            </div>
+            <div style={{ overflowY: 'auto', maxHeight: 380 }}>
+              {loadingLib ? (
+                <div className="flex items-center justify-center" style={{ height: 120 }}><div className="spinner" /></div>
+              ) : designs.length === 0 ? (
+                <p className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No designs in the library yet.</p>
+              ) : (() => {
+                const q = libQuery.trim().toLowerCase()
+                const filtered = q
+                  ? designs.filter((d) => d.name.toLowerCase().includes(q) || (d.description || '').toLowerCase().includes(q))
+                  : designs
+                if (filtered.length === 0) {
+                  return <p className="text-muted" style={{ textAlign: 'center', padding: 20 }}>No designs match "{libQuery}".</p>
+                }
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {filtered.map((d) => (
+                      <button key={d.id} className="flex items-center gap-3" disabled={saving}
+                        onClick={() => addFromLibrary(d)}
+                        style={{ padding: '8px 12px', background: 'var(--c-surface-2)', border: '1px solid var(--c-border)', borderRadius: 'var(--radius)', cursor: 'pointer', textAlign: 'left' }}>
+                        <Thumb path={`/designs/${d.id}/thumbnail.svg?v=${encodeURIComponent(d.updated_at)}`} alt={`${d.name} schematic`} size={44} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="truncate" style={{ fontWeight: 600, fontSize: '0.875rem' }}>{d.name}</div>
+                          <div className="text-xs text-muted">{fmtFtIn(d.outer_width)} × {fmtFtIn(d.outer_height)} · {d.section_size}" {d.gauge}</div>
+                        </div>
+                        <Plus size={16} color="var(--c-brand)" />
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
+            </div>
           </div>
         )}
       </div>
@@ -160,6 +209,7 @@ export default function EstimateBuilderPage() {
   const [loading, setLoading] = useState(true)
   const [showAdd, setShowAdd] = useState(false)
   const [downloading, setDownloading] = useState(false)
+  const [downloadingCustomer, setDownloadingCustomer] = useState(false)
   const [terms, setTerms] = useState({ title: '', notes: '', valid_until: '', terms: '', discount_type: '', discount_value: 0, advance_pct: 50, other_charges: [] })
   const { confirm, ConfirmDialog } = useConfirm()
 
@@ -331,6 +381,19 @@ export default function EstimateBuilderPage() {
     }
   }
 
+  // Customer-facing summary quotation: per-frame prices + specs, no cost breakdown.
+  const downloadCustomerPdf = async () => {
+    setDownloadingCustomer(true)
+    try {
+      const { data } = await estimatesApi.downloadCustomerPdf(id)
+      saveBlob(data, 'application/pdf', `SteelCAD_Quotation_${fileStem()}.pdf`)
+    } catch {
+      toast.error('PDF download failed')
+    } finally {
+      setDownloadingCustomer(false)
+    }
+  }
+
   const downloadBom = async () => {
     try {
       const { data } = await estimatesApi.downloadBomCsv(id)
@@ -393,6 +456,10 @@ export default function EstimateBuilderPage() {
               title="Consolidated bill of materials as a spreadsheet">
               <Download size={15} /> BOM CSV
             </button>
+            <button className="btn btn-secondary" onClick={downloadCustomerPdf} disabled={downloadingCustomer || est.frames.length === 0}
+              title="Summary quotation to send the customer — per-frame prices and specs, no cost breakdown">
+              {downloadingCustomer ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Download size={15} />} Customer PDF
+            </button>
             <button className="btn btn-primary" onClick={downloadPdf} disabled={downloading || est.frames.length === 0}>
               {downloading ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <Download size={15} />} Download PDF
             </button>
@@ -453,16 +520,25 @@ export default function EstimateBuilderPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: 'var(--c-surface-2)' }}>
-                {['Frame', 'Dimensions', 'Section', 'Qty', 'Unit Price', 'Amount', ''].map((h, i) => (
-                  <th key={i} style={{ textAlign: i >= 3 && i <= 5 ? 'right' : 'left', padding: '10px 16px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--c-text-muted)' }}>{h}</th>
+                {['', 'Frame', 'Dimensions', 'Section', 'Qty', 'Unit Price', 'Amount', ''].map((h, i) => (
+                  <th key={i} style={{ textAlign: i >= 4 && i <= 6 ? 'right' : 'left', padding: '10px 16px', fontSize: '0.72rem', textTransform: 'uppercase', color: 'var(--c-text-muted)' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {est.frames.length === 0 ? (
-                <tr><td colSpan={7} style={{ textAlign: 'center', padding: 28, color: 'var(--c-text-muted)' }}>No frames yet — add a door or window to begin.</td></tr>
+                <tr><td colSpan={8} style={{ textAlign: 'center', padding: 28, color: 'var(--c-text-muted)' }}>No frames yet — add a door or window to begin.</td></tr>
               ) : est.frames.map((f) => (
                 <tr key={f.id} style={{ borderTop: '1px solid var(--c-border)' }}>
+                  <td style={{ padding: '6px 8px 6px 16px', width: 88 }}>
+                    <div role="button" tabIndex={0} title={locked ? 'View design' : 'Edit design'}
+                      style={{ cursor: 'pointer' }}
+                      onClick={() => navigate(`/estimates/${id}/frames/${f.id}`)}
+                      onKeyDown={(e) => e.key === 'Enter' && navigate(`/estimates/${id}/frames/${f.id}`)}>
+                      <Thumb path={`/estimates/${id}/frames/${f.id}/thumbnail.svg?v=${encodeURIComponent(est.updated_at)}`}
+                        alt={`${f.name} schematic`} />
+                    </div>
+                  </td>
                   <td style={{ padding: '6px 16px', fontWeight: 600 }}>
                     <input
                       key={f.name}
@@ -477,7 +553,7 @@ export default function EstimateBuilderPage() {
                       style={{ fontWeight: 600, width: '100%', minWidth: 90, background: 'transparent', border: '1px solid transparent', borderRadius: 'var(--radius)', padding: '4px 6px' }}
                     />
                   </td>
-                  <td style={{ padding: '10px 16px', color: 'var(--c-text-muted)', fontFamily: 'var(--font-mono)' }}>{f.outer_width}ft × {f.outer_height}ft</td>
+                  <td style={{ padding: '10px 16px', color: 'var(--c-text-muted)', fontFamily: 'var(--font-mono)' }}>{fmtFtIn(f.outer_width)} × {fmtFtIn(f.outer_height)}</td>
                   <td style={{ padding: '6px 16px', color: 'var(--c-text-muted)' }}>
                     <div className="flex gap-1" style={{ alignItems: 'center' }}>
                       <select value={f.section_size} disabled={locked} onChange={(e) => setFrameSpec(f, { sectionSize: e.target.value })} title="Section size"

@@ -3,6 +3,7 @@ import { X, AppWindow, DoorOpen } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { designsApi } from '../api/client'
 import { makeEmptyTree } from '../store/editorStore'
+import DimensionInput from './DimensionInput'
 
 export default function NewDesignModal({ onClose, onCreate }) {
   const [productType, setProductType] = useState('window')
@@ -100,14 +101,12 @@ export default function NewDesignModal({ onClose, onCreate }) {
 
           <div className="flex gap-3">
             <div className="form-group" style={{ flex: 1 }}>
-              <label>Width (ft)</label>
-              <input type="number" min="1" max="30" step="0.5" value={width}
-                onChange={(e) => setWidth(e.target.value)} required />
+              <label>Width</label>
+              <DimensionInput value={width} onCommit={(v) => setWidth(v)} title={'Decimal feet or ft-in (e.g. 5\'6")'} />
             </div>
             <div className="form-group" style={{ flex: 1 }}>
-              <label>Height (ft)</label>
-              <input type="number" min="1" max="20" step="0.5" value={height}
-                onChange={(e) => setHeight(e.target.value)} required />
+              <label>Height</label>
+              <DimensionInput value={height} onCommit={(v) => setHeight(v)} title={'Decimal feet or ft-in (e.g. 4\'6")'} />
             </div>
           </div>
 

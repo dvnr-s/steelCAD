@@ -173,3 +173,103 @@ def test_back_hinge_allowed_on_double_shutter_but_not_single():
     leaf["paneSpec"] = {"shutterMaterial": "MS_PIPE", "infillType": "glass", "hasBeading": False}
     errors = validate_design_tree(_tree(leaf))
     assert any("V-16" in e for e in errors)
+
+
+# ─── V-21: customer-supplied shutter (HINGES_ONLY, spec §5.8) ──────
+
+def _hinges_only_leaf(config="single", **pane_overrides):
+    leaf = _leaf()
+    pane = {"shutterMaterial": "HINGES_ONLY", "infillType": "none", "hasBeading": False}
+    if config == "double":
+        pane["shutterConfig"] = "double"
+        hardware = [_hinge("front"), _hinge("back")]
+    else:
+        hardware = [_hinge("front")]
+    pane.update(pane_overrides)
+    leaf.update({"regionType": "shutter", "paneSpec": pane, "hardware": hardware})
+    return leaf
+
+
+def test_hinges_only_single_passes():
+    assert validate_design_tree(_tree(_hinges_only_leaf())) == []
+
+
+def test_hinges_only_double_passes():
+    # Exempt from V-19's jali-material / glass-infill requirement (§5.8); still
+    # needs a hinge on each side (V-5 / HW-9).
+    assert validate_design_tree(_tree(_hinges_only_leaf("double"))) == []
+
+
+def test_hinges_only_double_needs_back_hinge():
+    leaf = _hinges_only_leaf("double")
+    leaf["hardware"] = [_hinge("front")]
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-5" in e and "each side" in e for e in errors)
+
+
+def test_hinges_only_rejects_infill():
+    errors = validate_design_tree(_tree(_hinges_only_leaf(infillType="glass")))
+    assert any("V-21" in e and "infillType" in e for e in errors)
+
+
+def test_hinges_only_rejects_beading():
+    errors = validate_design_tree(_tree(_hinges_only_leaf(hasBeading=True)))
+    assert any("V-21" in e and "beading" in e for e in errors)
+
+
+def test_hinges_only_rejects_jali_material():
+    errors = validate_design_tree(_tree(_hinges_only_leaf("double", jaliMaterial="MS_PIPE")))
+    assert any("V-21" in e and "jali-side material" in e for e in errors)
+
+
+# ─── V-20: manual grill bar adjustment bounds (§6.2A) ──────────────
+
+def _ss_grill(bar_adjust=None, material="SS_PIPE_ROUND"):
+    overlay = {"id": str(uuid4()), "type": "overlay", "overlayType": "grill", "material": material}
+    if bar_adjust is not None:
+        overlay["config"] = {"barAdjust": bar_adjust}
+    return overlay
+
+
+def test_bar_adjust_within_bounds_is_valid():
+    # 4×3 fixed leaf: auto = 4 bars, +2 = 6, max = 18 → fine.
+    leaf = _leaf()
+    leaf["overlays"] = [_ss_grill(2)]
+    assert validate_design_tree(_tree(leaf)) == []
+
+
+def test_bar_adjust_cannot_zero_out_the_grill():
+    # auto 4 − 4 = 0 bars → below the 1-bar minimum.
+    leaf = _leaf()
+    leaf["overlays"] = [_ss_grill(-4)]
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-20" in e for e in errors)
+
+
+def test_bar_adjust_capped_at_two_inch_pitch():
+    # max = floor(3 × 6) = 18; auto 4 + 15 = 19 → too dense.
+    leaf = _leaf()
+    leaf["overlays"] = [_ss_grill(15)]
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-20" in e for e in errors)
+
+
+def test_bar_adjust_must_be_whole_number():
+    leaf = _leaf()
+    leaf["overlays"] = [_ss_grill(2.5)]
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-20" in e and "whole number" in e for e in errors)
+
+
+def test_bar_adjust_invalid_on_ms_grill():
+    leaf = _leaf()
+    leaf["overlays"] = [_ss_grill(2, material="MS_SQUARE")]
+    errors = validate_design_tree(_tree(leaf))
+    assert any("V-20" in e and "MS grill" in e for e in errors)
+
+
+def test_bar_adjust_checked_on_branch_continuity_grill():
+    branch = _branch([_leaf(width=2.0), _leaf(width=2.0)])
+    branch["overlays"] = [_ss_grill(-4)]
+    errors = validate_design_tree(_tree(branch))
+    assert any("V-20" in e for e in errors)

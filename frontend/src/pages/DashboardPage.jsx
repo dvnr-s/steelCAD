@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { Plus, Trash2, BarChart3, Clock, Copy, Search } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { designsApi } from '../api/client'
+import { fmtFtIn } from '../lib/format'
 import NewDesignModal from '../components/NewDesignModal'
 import TopNav from '../components/TopNav'
 import useThumbnail from '../hooks/useThumbnail'
@@ -18,7 +19,7 @@ function DesignCard({ design, onDelete, onDuplicate, onOpen }) {
   const { confirm, ConfirmDialog } = useConfirm()
   const role = useAuthStore((s) => s.user?.role)
   const canDelete = role === 'admin' || role === 'owner'
-  const thumbnail = useThumbnail(design.id, design.updated_at)
+  const thumbnail = useThumbnail(`/designs/${design.id}/thumbnail.svg?v=${encodeURIComponent(design.updated_at)}`)
 
   const handleDelete = async (e) => {
     e.stopPropagation()
@@ -60,7 +61,7 @@ function DesignCard({ design, onDelete, onDuplicate, onOpen }) {
         </div>
         <div className="flex gap-2" style={{ flexWrap: 'wrap' }}>
           {design.product_type === 'door' && <span className="badge" style={{ background: 'rgba(239,68,68,0.15)', color: '#ef4444' }}>Door</span>}
-          <span className="badge badge-brand">{design.outer_width}ft × {design.outer_height}ft</span>
+          <span className="badge badge-brand">{fmtFtIn(design.outer_width)} × {fmtFtIn(design.outer_height)}</span>
           <span className="badge badge-accent">{design.section_size}" {design.gauge}</span>
         </div>
       </div>

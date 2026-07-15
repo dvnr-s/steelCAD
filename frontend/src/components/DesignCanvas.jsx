@@ -14,8 +14,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { Stage, Layer, Rect, Line, Text, Group, Circle } from 'react-konva'
 import { Minus, Plus, Maximize2 } from 'lucide-react'
-import useEditorStore, { snapOffset, MIN_SIDE } from '../store/editorStore'
-import { dimLabel } from '../lib/format'
+import useEditorStore, { snapOffset, MIN_SIDE, findRegionNode } from '../store/editorStore'
+import { dimLabel, fmtFtIn, parseFt } from '../lib/format'
 import {
   ACTUAL_SCALE, FIT_PAD, fitScale, collect, regionFill, regionStroke, regionTag,
   DoorSwing, ConcreteBase, VoidHatch, GrillOverlay,
@@ -53,9 +53,15 @@ export default function DesignCanvas({ width, height }) {
   const setFrameSize = useEditorStore((s) => s.setFrameSize)
   const beginInteraction = useEditorStore((s) => s.beginInteraction)
   const endInteraction = useEditorStore((s) => s.endInteraction)
+  const showDims = useEditorStore((s) => s.showDims)
 
   const [draggingId, setDraggingId] = useState(null)
   const [ghost, setGhost] = useState(null)
+  // Inline dimension editing — click a frame or mullion-side label to type an
+  // exact value. { kind: 'frameW'|'frameH'|'sideA'|'sideB', regionId?, x, y, value }
+  const [edit, setEdit] = useState(null)
+  const editDone = useRef(false)
+  const openEdit = (spec) => { editDone.current = false; setEdit(spec) }
   // View transform: screen = ft * scale + t. Null until first layout.
   const [view, setView] = useState(null)
   const [isPanning, setIsPanning] = useState(false)
@@ -187,6 +193,32 @@ export default function DesignCanvas({ width, height }) {
 
   const zoomPct = Math.round((scale / ACTUAL_SCALE) * 100)
 
+  // Commit an inline dimension edit. Frame edits resize the whole unit; side
+  // edits move the split so the typed side gets that size (snapped to 3").
+  const commitEdit = (raw) => {
+    const current = edit
+    setEdit(null)
+    if (!current || editDone.current) return
+    editDone.current = true
+    const parsed = parseFt(raw)
+    if (parsed == null || parsed <= 0) return
+    if (current.kind === 'frameW') {
+      setFrameSize(parsed, frame.height, { history: true })
+    } else if (current.kind === 'frameH') {
+      setFrameSize(frame.width, parsed, { history: true })
+    } else {
+      const region = findRegionNode(frame.rootRegion, current.regionId)
+      if (!region?.split) return
+      const axis = region.split.direction === 'vertical' ? region.width : region.height
+      const offset = current.kind === 'sideA' ? parsed : axis - parsed
+      setSplitPosition(current.regionId, offset / axis, { history: true })
+    }
+  }
+
+  const labelHover = (on) => (e) => {
+    e.target.getStage().container().style.cursor = on ? 'pointer' : (addMode ? 'crosshair' : 'grab')
+  }
+
   return (
     <>
     <Stage
@@ -208,9 +240,21 @@ export default function DesignCanvas({ width, height }) {
         {/* Door product: base sits in the concrete (3-sided frame) */}
         {tree.productType === 'door' && <ConcreteBase frame={frame} px={px} py={py} />}
 
-        {/* Frame dimension labels */}
-        <Text x={px(frame.width / 2) - 20} y={py(0) - 22} text={`${frame.width}ft`} fontSize={11} fill="#8b949e" fontFamily="Inter, sans-serif" listening={false} />
-        <Text x={px(0) - 30} y={py(frame.height / 2) - 8} text={`${frame.height}ft`} fontSize={11} fill="#8b949e" fontFamily="Inter, sans-serif" rotation={-90} listening={false} />
+        {/* Frame dimension labels — click to type an exact size */}
+        <Text
+          x={px(frame.width / 2) - 20} y={py(0) - 22} text={fmtFtIn(frame.width)}
+          fontSize={11} fill="#8b949e" fontFamily="Inter, sans-serif"
+          onMouseEnter={labelHover(true)} onMouseLeave={labelHover(false)}
+          onClick={() => openEdit({ kind: 'frameW', x: px(frame.width / 2) - 34, y: Math.max(2, py(0) - 28), value: fmtFtIn(frame.width) })}
+          onTap={() => openEdit({ kind: 'frameW', x: px(frame.width / 2) - 34, y: Math.max(2, py(0) - 28), value: fmtFtIn(frame.width) })}
+        />
+        <Text
+          x={px(0) - 30} y={py(frame.height / 2) - 8} text={fmtFtIn(frame.height)}
+          fontSize={11} fill="#8b949e" fontFamily="Inter, sans-serif" rotation={-90}
+          onMouseEnter={labelHover(true)} onMouseLeave={labelHover(false)}
+          onClick={() => openEdit({ kind: 'frameH', x: Math.max(2, px(0) - 76), y: py(frame.height / 2) - 12, value: fmtFtIn(frame.height) })}
+          onTap={() => openEdit({ kind: 'frameH', x: Math.max(2, px(0) - 76), y: py(frame.height / 2) - 12, value: fmtFtIn(frame.height) })}
+        />
 
         {/* Regions */}
         {regions.map((region) => {
@@ -231,7 +275,7 @@ export default function DesignCanvas({ width, height }) {
                 <Text x={rx + 4} y={ry + 4} text={regionTag(region)} fontSize={9}
                   fill={regionStroke(region, selectedId)} fontFamily="JetBrains Mono, monospace" opacity={0.7} listening={false} />
               )}
-              {rw > 40 && rh > 24 && (
+              {showDims && rw > 40 && rh > 24 && (
                 <Text x={rx + rw / 2 - 20} y={ry + rh / 2 - 7} text={dimLabel(region)} fontSize={10}
                   fill="#484f58" fontFamily="JetBrains Mono, monospace" listening={false} />
               )}
@@ -252,7 +296,8 @@ export default function DesignCanvas({ width, height }) {
           )
         })}
 
-        {/* Draggable mullions */}
+        {/* Draggable mullions — click selects (exact position editing in the
+            panel), drag repositions, double-click removes */}
         {splits.map((s) => {
           const vertical = s.direction === 'vertical'
           const centerX = px(s.x + s.w * s.position)
@@ -262,14 +307,32 @@ export default function DesignCanvas({ width, height }) {
           const barW = vertical ? BAR : s.w * scale
           const barH = vertical ? s.h * scale : BAR
           const dragging = draggingId === s.id
+          const isSelected = s.regionId === selectedId
+          // Side dimensions show while dragging or when selected; when
+          // selected they're clickable to type an exact size.
+          const showSides = dragging || isSelected
+          const sideA = vertical ? s.w * s.position : s.h * s.position
+          const sideB = vertical ? s.w * (1 - s.position) : s.h * (1 - s.position)
+          const posA = vertical
+            ? { x: px(s.x) + (s.w * s.position * scale) / 2 - 16, y: py(s.y) + 6 }
+            : { x: px(s.x) + 6, y: py(s.y) + (s.h * s.position * scale) / 2 - 6 }
+          const posB = vertical
+            ? { x: centerX + (s.w * (1 - s.position) * scale) / 2 - 16, y: py(s.y) + 6 }
+            : { x: px(s.x) + 6, y: centerY + (s.h * (1 - s.position) * scale) / 2 - 6 }
+          const openSideEdit = (kind, pos, value) => () => {
+            if (dragging) return
+            setEdit({ kind, regionId: s.regionId, x: pos.x - 8, y: pos.y - 4, value: fmtFtIn(value) })
+          }
 
           return (
             <Group key={s.id}>
               <Rect
                 x={barX} y={barY} width={barW} height={barH}
-                fill={dragging ? '#3b82f6' : '#6b7280'}
+                fill={dragging || isSelected ? '#3b82f6' : '#6b7280'}
                 cornerRadius={2}
                 draggable
+                onClick={() => { if (!addMode) select(s.regionId) }}
+                onTap={() => { if (!addMode) select(s.regionId) }}
                 onMouseEnter={(e) => { e.target.getStage().container().style.cursor = vertical ? 'ew-resize' : 'ns-resize' }}
                 onMouseLeave={(e) => { e.target.getStage().container().style.cursor = addMode ? 'crosshair' : 'grab' }}
                 dragBoundFunc={(pos) => {
@@ -296,17 +359,20 @@ export default function DesignCanvas({ width, height }) {
                 onDblClick={() => collapseRegion(s.regionId)}
                 onDblTap={() => collapseRegion(s.regionId)}
               />
-              {/* Live side dimensions while dragging */}
-              {dragging && vertical && (
+              {showSides && (
                 <>
-                  <Text x={px(s.x) + (s.w * s.position * scale) / 2 - 16} y={py(s.y) + 6} text={`${(s.w * s.position).toFixed(2)}ft`} fontSize={11} fill="#3b82f6" fontFamily="JetBrains Mono, monospace" />
-                  <Text x={centerX + (s.w * (1 - s.position) * scale) / 2 - 16} y={py(s.y) + 6} text={`${(s.w * (1 - s.position)).toFixed(2)}ft`} fontSize={11} fill="#3b82f6" fontFamily="JetBrains Mono, monospace" />
-                </>
-              )}
-              {dragging && !vertical && (
-                <>
-                  <Text x={px(s.x) + 6} y={py(s.y) + (s.h * s.position * scale) / 2 - 6} text={`${(s.h * s.position).toFixed(2)}ft`} fontSize={11} fill="#3b82f6" fontFamily="JetBrains Mono, monospace" />
-                  <Text x={px(s.x) + 6} y={centerY + (s.h * (1 - s.position) * scale) / 2 - 6} text={`${(s.h * (1 - s.position)).toFixed(2)}ft`} fontSize={11} fill="#3b82f6" fontFamily="JetBrains Mono, monospace" />
+                  <Text
+                    x={posA.x} y={posA.y} text={fmtFtIn(sideA)} fontSize={11} fill="#3b82f6"
+                    fontFamily="JetBrains Mono, monospace" listening={!dragging}
+                    onMouseEnter={labelHover(true)} onMouseLeave={labelHover(false)}
+                    onClick={openSideEdit('sideA', posA, sideA)} onTap={openSideEdit('sideA', posA, sideA)}
+                  />
+                  <Text
+                    x={posB.x} y={posB.y} text={fmtFtIn(sideB)} fontSize={11} fill="#3b82f6"
+                    fontFamily="JetBrains Mono, monospace" listening={!dragging}
+                    onMouseEnter={labelHover(true)} onMouseLeave={labelHover(false)}
+                    onClick={openSideEdit('sideB', posB, sideB)} onTap={openSideEdit('sideB', posB, sideB)}
+                  />
                 </>
               )}
             </Group>
@@ -340,6 +406,26 @@ export default function DesignCanvas({ width, height }) {
         />
       </Layer>
     </Stage>
+
+    {/* Inline dimension editor — floats over the clicked label */}
+    {edit && (
+      <input
+        autoFocus
+        defaultValue={edit.value}
+        title={'Decimal feet or ft-in (e.g. 2\'6") — Enter to apply, Esc to cancel'}
+        style={{
+          position: 'absolute', left: edit.x, top: edit.y, width: 72, zIndex: 20,
+          fontSize: '0.8rem', padding: '2px 6px', textAlign: 'center',
+          fontFamily: 'var(--font-mono)',
+        }}
+        onFocus={(e) => e.target.select()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); commitEdit(e.target.value) }
+          if (e.key === 'Escape') setEdit(null)
+        }}
+        onBlur={(e) => commitEdit(e.target.value)}
+      />
+    )}
 
     {/* Zoom controls — true size is 100% (60px/ft); wheel zooms, drag pans. */}
     <div style={{

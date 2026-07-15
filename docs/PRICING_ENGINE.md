@@ -134,6 +134,14 @@ cost     = pane_RFT × SHUTTER_{material}        # MS_PIPE=₹100, GP_SHEET=₹2
 `fixed`, `open`, `louver`, and `door` regions have **no** structural pane. (`door`
 specifically is priced by the frame, not the leaf — §4A.2.)
 
+A **`HINGES_ONLY`** shutter (§5.8, `shutterMaterial: "HINGES_ONLY"` — customer-supplied,
+UI label "No Shutter, only Hinges") also has no structural pane, and no infill or beading:
+the customer fabricates the shutter, so `_is_hinges_only` short-circuits
+`_compute_pane_structure`/`_compute_jali_pane_structure`/`_compute_infill`/`_compute_beading`
+to `None`. Hinges are its only cost. A `HINGES_ONLY` **double** just means we hinge both
+faces (front + back) — no second pane. It carries no material rate (nothing in the rate
+table).
+
 A **double-shuttered** region (§5.7, `paneSpec.shutterConfig: "double"` — a glass
 shutter on one face of the frame, a jali shutter on the other) prices a **second**
 full pane run at the jali side's own material rate
@@ -172,12 +180,20 @@ identically.
 ### 5.5 Grill — MS area or SS bar-count (`_compute_grill`)
 ```
 MS_SQUARE      → area = w × h;  cost = area × GRILL_MS_SQUARE (₹100/sqft)
-SS_PIPE_*      → bars = (2 × height) − 2
+SS_PIPE_*      → bars = max(0, round(2 × height − 2)) + barAdjust   # whole bars, §6.2/§6.2A
                  total_RFT = bars × width
                  cost = total_RFT × GRILL_{material}   # round=₹90, square=₹110 /RFT
 ```
 Grill is read from the region it's attached to (leaf, or branch for SS continuity).
 `door` regions never carry grill and are skipped defensively.
+
+SS bar math lives in `services/grill.py` (mirrored 1:1 by `frontend/src/lib/grill.js`),
+so pricing, validation (V-20), the canvas and the PDF diagram always agree — the bars
+drawn are exactly the bars billed. `barAdjust` is an optional whole-number delta stored
+in the overlay's `config` (customer-demanded density, spec §6.2A); when non-zero the
+effective count must stay within `1 … floor(height × 6)` or validation rejects it.
+The breakdown line carries `bars` / `bar_adjust` fields and notes the adjustment in its
+description (e.g. `10 bars (auto 8 +2) × 4ft = 40 RFT × ₹90/RFT`).
 
 ---
 

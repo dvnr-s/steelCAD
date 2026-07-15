@@ -31,11 +31,11 @@ frontend/src/
 ├── store/
 │   ├── authStore.js      auth state (persisted) + login/logout/fetchMe
 │   └── editorStore.js    the design tree, undo/redo, geometry engine, live price
-├── hooks/useThumbnail.js  design thumbnail loader
+├── hooks/useThumbnail.js  schematic SVG loader (designs + estimate frames)
 ├── lib/
 │   ├── validators.js     client-side mirror of INV-*/V-* rules (live feedback)
 │   ├── canvasDraw.jsx    static tree renderer (thumbnails/previews)
-│   └── format.js         fmtFt / dimLabel (display formatting; height×width)
+│   └── format.js         fmtFtIn / parseFt / dimLabel (ft-in display + input parsing)
 ├── components/
 │   ├── DesignCanvas.jsx   Konva canvas: render, zoom/pan, drag interactions
 │   ├── PropertiesPanel.jsx editors for the selected region
@@ -177,6 +177,9 @@ maps feet ↔ pixels; it owns no geometry of its own.
 Helper components render domain symbols: `DoorSwing` (the hinge-side swing triangle),
 `ConcreteBase` (the in-concrete base hatch for door products), `VoidHatch` (diagonal
 hatch on empty `open` regions), and `GrillOverlay` (MS crosshatch / SS horizontal bars).
+SS bars come from `lib/grill.js` — the shared bar-count/offset math (mirrored by the
+backend's `services/grill.py`), so the drawn bars are exactly the billed bars,
+distributed evenly across the region — `gap = height / (bars + 1)` (spec §6.2).
 Region dimension labels use `dimLabel` (height×width, decimals cleaned).
 
 ---
@@ -186,13 +189,17 @@ Region dimension labels use `dimLabel` (height×width, decimals cleaned).
 Context-sensitive editors for the selected region, each writing back via `updateRegion`:
 
 - **Type** — `open`/`fixed`/`shutter`/`door`/`louver`; switching type resets dependent
-  fields per spec §10.3.
+  fields per spec §10.3: shutter/door auto-add hinges (R-4/R-5), and the grill overlay
+  survives only onto `fixed`/`shutter` (removed for open/louver/door).
 - **Pane** — shutter material, infill (none/glass/jali), beading (gated on infill).
   Shutter regions get a **Shuttering** toggle (single / double, spec §5.7): double shows
   per-side editors (glass-side material + beading, jali-side material + beading), forces
   glass infill, and auto-adds a jali-side (`side: "back"`) hinge set; back to single
   clears the jali fields and strips back-side hardware.
-- **Grill** — none / MS square (leaf only) / SS round / SS square.
+- **Grill** — none / MS square (leaf only) / SS round / SS square; offered on
+  fixed/shutter leaves and branches (SS continuity). SS grills show the live billed
+  bar count + RFT with a −/+ stepper for the manual `barAdjust` delta (spec §6.2A,
+  clamped to 1 bar … one-per-2"; reset-to-auto when adjusted).
 - **Hardware** — add/remove hinges and (door-only) locks; front/back groups for
   double-rebate doors ("Front side" / "Other side") and double shutters
   ("Glass shutter" / "Jali shutter").
@@ -207,19 +214,53 @@ Context-sensitive editors for the selected region, each writing back via `update
 The frames table for an estimate. Each row shows a frame's name, dimensions, section,
 quantity, unit price, and amount, with **inline editing**: click the name to rename;
 section/gauge are dropdowns that patch the frame's `tree_json` and reprice. Below, the
-commercial terms (discount, advance) and the rolled-up totals; a **Download PDF** action
-streams the quotation. The **Add Frame** modal creates a one-off (new window/door with
-dimensions + section/gauge) or pulls a copy from the design library.
+commercial terms (discount, advance) and the rolled-up totals. Two PDF actions:
+**Download PDF** streams the internal quotation (per-frame cost breakdowns + BOM, for
+cross-checking) and **Customer PDF** streams the customer-facing summary
+(`/estimates/{id}/pdf/customer` — frame cards with specs and per-frame prices, no cost
+breakdown, saved as `SteelCAD_Quotation_…`). The **Add Frame** modal creates a one-off
+(new window/door with dimensions + section/gauge) or pulls a copy from the design
+library.
 
 ---
 
 ## 10. Display formatting (`lib/format.js`)
 
-- `fmtFt(n)` — rounds off float drift (2 dp) and drops trailing zeros
-  (`4.7499999… → "4.75"`, `4.0 → "4"`).
+- `fmtFtIn(n)` — feet-and-inches display, the app-wide dimension format
+  (`5.5 → "5'6\""`, `5 → "5'"`, `0.75 → "9\""`). Geometry is grid-aligned to
+  0.25 ft so inches are always whole; rounding to the nearest inch also absorbs
+  float drift.
+- `parseFt(str)` — parses a dimension input into decimal feet; accepts decimal
+  feet (`5.5`), ft-in in common spellings (`5'6"`, `5' 6`, `5ft 6in`), inches
+  only (`66"`), and smart quotes. Returns `null` on garbage.
+- `fmtFt(n)` — legacy decimal formatting: rounds off float drift (2 dp) and drops
+  trailing zeros (`4.7499999… → "4.75"`, `4.0 → "4"`).
 - `dimLabel(region)` — region dimensions in **height × width** order (fabrication
-  convention), both formatted. Used by the canvas labels, the properties header, and
-  validation messages for consistency.
+  convention), ft-in formatted. Used by the canvas labels, the properties header,
+  and validation messages for consistency.
 
-> The backend mirrors this with its own `_fmt_ft` for region dimensions in price
-> breakdowns, so the editor and the API agree on presentation.
+`components/DimensionInput.jsx` wraps `fmtFtIn`/`parseFt` into a text input that
+commits on blur/Enter and reverts on Escape or unparseable input — every
+dimension field (new design/frame modals, frame size, split offset) uses it.
+
+> The backend mirrors `fmtFtIn` with `app/services/units.py::fmt_ft_in`, used by
+> pricing breakdowns, PDF frame dimensions, and diagram labels — so the editor,
+> the API, and the PDFs agree on presentation. Keep the two in sync.
+
+---
+
+## 11. Editor conveniences
+
+- **Exact dimension entry** — frame width/height are editable in the properties
+  panel (no selection) and by clicking the frame size labels on the canvas;
+  clicking a mullion selects it (panel shows an offset-from-left/top field) and
+  its blue side labels are click-to-type. All entries snap to the 3" grid.
+- **Dimension labels** — every region shows its H×W label by default; the
+  **Dims** button in the tool palette toggles them.
+- **Copy/paste** — Ctrl+C / Ctrl+V per region, plus **Ctrl+Shift+V** (or the
+  panel button) to apply the copied spec to *every* leaf of the same region
+  type in one undo step (`pasteOntoAllSimilar`).
+- **Saving** — Ctrl+S everywhere; estimate frames also autosave (1.5 s debounce,
+  only when client validation passes, skipped when the estimate is locked).
+  Library designs stay manual-save. **Save to Library** in frame mode copies the
+  frame's tree into the reusable design library via `POST /designs`.

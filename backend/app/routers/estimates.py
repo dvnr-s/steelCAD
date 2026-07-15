@@ -37,7 +37,8 @@ from app.services.audit import record_audit
 from app.services.pricing import price_design, _apply_commercial_terms, _round2, sum_other_charges
 from app.services.validation import validate_design_tree, validate_tree_bounds
 from app.services.bom import build_bom
-from app.services.pdf import generate_estimate_pdf
+from app.services.diagram import tree_to_svg
+from app.services.pdf import generate_estimate_pdf, generate_customer_estimate_pdf
 from app.routers.settings import get_or_create_company
 
 router = APIRouter(tags=["Estimates"])
@@ -677,6 +678,34 @@ async def duplicate_frame(
     return _detail(estimate)
 
 
+@router.get("/estimates/{estimate_id}/frames/{frame_id}/thumbnail.svg",
+            summary="Frame schematic thumbnail", response_class=Response)
+async def frame_thumbnail(
+    estimate_id: UUID,
+    frame_id: UUID,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Same deterministic schematic as the PDF diagrams (designs have the
+    equivalent under /designs/{id}/thumbnail.svg)."""
+    estimate = await _get_estimate_or_404(estimate_id, db)
+    frame = next((f for f in estimate.frames if f.id == frame_id), None)
+    if not frame:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Frame not found")
+
+    # Frames have no updated_at of their own, but every frame edit recomputes
+    # the estimate (bumping estimates.updated_at) — so this makes a valid ETag.
+    etag = f'W/"{frame.id}:{estimate.updated_at.isoformat()}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers={"ETag": etag})
+    return Response(
+        content=tree_to_svg(frame.tree_json or {}),
+        media_type="image/svg+xml",
+        headers={"ETag": etag, "Cache-Control": "private, max-age=3600"},
+    )
+
+
 @router.delete("/estimates/{estimate_id}/frames/{frame_id}", response_model=EstimateDetail, summary="Remove a frame")
 async def delete_frame(
     estimate_id: UUID,
@@ -742,6 +771,29 @@ async def download_estimate_pdf(
     pdf_bytes = generate_estimate_pdf(estimate, company)
     rev_suffix = f"_rev{estimate.revision}" if (estimate.revision or 1) > 1 else ""
     filename = f"SteelCAD_Estimate_EST-{estimate.number:04d}{rev_suffix}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/estimates/{estimate_id}/pdf/customer",
+            summary="Download the customer-facing quotation PDF (summary, no cost breakdown)",
+            response_class=Response)
+@limiter.limit("10/minute")  # WeasyPrint rendering is CPU-heavy
+async def download_customer_estimate_pdf(
+    request: Request,
+    estimate_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    estimate = await _get_estimate_or_404(estimate_id, db)
+    company = await get_or_create_company(db)
+    pdf_bytes = generate_customer_estimate_pdf(estimate, company)
+    rev_suffix = f"_rev{estimate.revision}" if (estimate.revision or 1) > 1 else ""
+    # "Quotation" (vs the internal "Estimate") so the two never mix up in a Downloads folder.
+    filename = f"SteelCAD_Quotation_EST-{estimate.number:04d}{rev_suffix}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

@@ -1,8 +1,9 @@
 """
 Design tree validation service.
-Implements invariants (INV-1..INV-10) and validation rules (V-1..V-19)
+Implements invariants (INV-1..INV-10) and validation rules (V-1..V-20)
 from design_rules_spec.md §3.3 and §11.
 """
+from app.services.grill import ss_grill_auto_bars, ss_grill_bar_count, ss_grill_max_bars
 
 
 # Server-side sanity bounds — protect pricing/PDF/diagram walkers from
@@ -184,25 +185,39 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
             errors.append(f"P-5: '{rt}' region {rid} should not have pane specification")
 
     # V-12: shutter regions must have a shutter material (door regions do NOT —
-    # a door leaf has no pane, see V-18 / §4A.2)
+    # a door leaf has no pane, see V-18 / §4A.2). HINGES_ONLY (§5.8) counts.
     if rt == "shutter":
         if not ps or not ps.get("shutterMaterial"):
             errors.append(f"V-12: shutter region {rid} must have a shutter material selected")
 
-    # V-19: double shuttering (§5.7) — shutter regions only; needs a jali-side
-    # material; the explicit infill is the glass side. Jali-side fields are
-    # meaningless while single.
+    # HINGES_ONLY (§5.8): customer-supplied shutter — we charge hinges only.
+    is_hinges_only = rt == "shutter" and (ps or {}).get("shutterMaterial") == "HINGES_ONLY"
+
+    # V-19: double shuttering (§5.7) — shutter regions only. A FABRICATED double
+    # needs a jali-side material; the explicit infill is the glass side. A
+    # HINGES_ONLY double (§5.8) is exempt — its constraints are V-21. Jali-side
+    # fields are meaningless while single.
     is_double_shutter = rt == "shutter" and (ps or {}).get("shutterConfig") == "double"
     if (ps or {}).get("shutterConfig", "single") == "double":
         if rt != "shutter":
             errors.append(f"V-19: double shuttering is only valid on 'shutter' regions, not '{rt}' region {rid}")
-        else:
+        elif not is_hinges_only:
             if not ps.get("jaliMaterial"):
                 errors.append(f"V-19: double-shuttered region {rid} must have a jali-side shutter material selected")
             if ps.get("infillType", "none") != "glass":
                 errors.append(f"V-19: double-shuttered region {rid} must have glass infill (the jali side is implied)")
     elif ps and (ps.get("jaliMaterial") or ps.get("jaliBeading")):
         errors.append(f"V-19: jali-side pane fields on region {rid} require double shuttering")
+
+    # V-21: a HINGES_ONLY shutter (§5.8) is customer-supplied — no infill, no
+    # beading, no jali-side material. Only hinges are ours (P-17).
+    if is_hinges_only:
+        if ps.get("infillType", "none") != "none":
+            errors.append(f"V-21: HINGES_ONLY (customer-supplied) shutter {rid} must have infillType 'none'")
+        if ps.get("hasBeading") or ps.get("jaliBeading"):
+            errors.append(f"V-21: HINGES_ONLY (customer-supplied) shutter {rid} cannot have beading")
+        if ps.get("jaliMaterial"):
+            errors.append(f"V-21: HINGES_ONLY (customer-supplied) shutter {rid} cannot have a jali-side material")
 
     # V-18: door regions carry hardware only — no pane (shutter material / infill /
     # beading) and no grill overlay (§4A.2)
@@ -258,6 +273,37 @@ def _validate_leaf(region: dict, errors: list[str]) -> None:
         if not overlay.get("material"):
             errors.append(f"V-9: Grill on region {rid} must have a valid material")
 
+    # V-20: manual bar adjustment bounds (§6.2A)
+    _validate_grill_bar_adjust(region, errors)
+
+
+def _validate_grill_bar_adjust(region: dict, errors: list[str]) -> None:
+    """
+    V-20 (§6.2A): `barAdjust` must be a whole number, is valid only on SS
+    grills, and when non-zero the effective bar count must stay within
+    1 … floor(height × 6) (one bar per 2" of height). Rejected, never clamped —
+    the billed count must always equal what the user sees.
+    """
+    rid = str(region.get("id", "?"))
+    h = region.get("height", 0)
+    for overlay in region.get("overlays", []):
+        raw = (overlay.get("config") or {}).get("barAdjust")
+        if raw in (None, 0):
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, int):
+            errors.append(f"V-20: Grill bar adjustment on region {rid} must be a whole number")
+            continue
+        if overlay.get("material") == "MS_SQUARE":
+            errors.append(f"V-20: Bar adjustment is not valid on MS grill (region {rid})")
+            continue
+        bars = ss_grill_bar_count(h, raw)
+        max_bars = ss_grill_max_bars(h)
+        if bars < 1 or bars > max_bars:
+            errors.append(
+                f"V-20: Grill bar count on region {rid} must be between 1 and {max_bars} "
+                f"(auto {ss_grill_auto_bars(h)} {raw:+d} = {bars})"
+            )
+
 
 def _validate_branch(region: dict, errors: list[str]) -> None:
     """Validate a branch region — must not have leaf-only properties."""
@@ -286,3 +332,6 @@ def _validate_branch(region: dict, errors: list[str]) -> None:
     for overlay in region.get("overlays", []):
         if overlay.get("material") == "MS_SQUARE":
             errors.append(f"V-6: MS grill cannot be applied to branch region {rid}")
+
+    # V-20: manual bar adjustment bounds (§6.2A) — SS continuity grills too
+    _validate_grill_bar_adjust(region, errors)

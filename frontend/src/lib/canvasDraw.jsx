@@ -10,6 +10,7 @@
  * (app/services/diagram.py) so every frame's diagram is deterministic and uniform.
  */
 import { Line } from 'react-konva'
+import { grillBarAdjust, ssGrillBarOffsets } from './grill'
 
 export const ACTUAL_SCALE = 60   // "100%" = 60 pixels per foot (true size)
 export const MAX_SCALE = 240     // fit cap — matches the canvas zoom-in limit, so fit can fill the viewport
@@ -130,10 +131,11 @@ export function GrillOverlay({ region, px, py, scale }) {
     return <>{lines}</>
   }
 
-  const bars = Math.max(1, Math.round((2 * region.height) - 2))
-  const gap = ph / (bars + 1)
-  const lines = []
-  for (let i = 1; i <= bars; i++)
-    lines.push(<Line key={i} points={[x + 2, y + gap * i, x + pw - 2, y + gap * i]} stroke="rgba(147,197,253,0.5)" strokeWidth={1.5} listening={false} />)
+  // SS bars: drawn count = billed count, laid at the spec's derived pitch so
+  // regions of different heights show the same spacing (§6.2).
+  const offsets = ssGrillBarOffsets(region.height, grillBarAdjust(region.overlays?.[0]))
+  const lines = offsets.map((off, i) => (
+    <Line key={i} points={[x + 2, y + off * scale, x + pw - 2, y + off * scale]} stroke="rgba(147,197,253,0.5)" strokeWidth={1.5} listening={false} />
+  ))
   return <>{lines}</>
 }

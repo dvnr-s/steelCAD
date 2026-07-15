@@ -18,6 +18,9 @@ Key design decisions:
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
+from app.services.grill import grill_bar_adjust, ss_grill_auto_bars
+from app.services.units import fmt_ft_in
+
 
 # Type alias for rate dictionary
 RateDict = dict[str, float]
@@ -38,11 +41,6 @@ def _round2(value: float) -> float:
 def _round_rupee(value: float) -> int:
     """Round to nearest rupee (PR-3)."""
     return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-
-
-def _fmt_ft(value: float) -> str:
-    """Feet value for display: 2-decimal round, trailing zeros dropped (4.0 → '4')."""
-    return f"{round(float(value), 2):g}"
 
 
 # ─── Rate lookup ───────────────────────────────────────────────────
@@ -244,6 +242,16 @@ def _is_double_shutter(region: dict) -> bool:
     return region.get("regionType") == "shutter" and ps.get("shutterConfig") == "double"
 
 
+def _is_hinges_only(region: dict) -> bool:
+    """True for a customer-supplied shutter (§5.8): shutterMaterial == "HINGES_ONLY".
+
+    We don't fabricate the shutter — the customer supplies it — so pane structure,
+    infill, and beading all cost ₹0 (P-17). Hinges are the region's only cost.
+    """
+    ps = region.get("paneSpec") or {}
+    return region.get("regionType") == "shutter" and ps.get("shutterMaterial") == "HINGES_ONLY"
+
+
 def _pane_item(mat: str, rf: float, rates: RateDict, label: str) -> dict:
     """One structural pane line item: rf × shutter material rate."""
     rate = _lookup_rate(f"SHUTTER_{mat}", rates)
@@ -273,6 +281,10 @@ def _compute_pane_structure(region: dict, rates: RateDict) -> Optional[dict]:
     if rt != "shutter":
         return None
 
+    # Customer-supplied shutter (§5.8): no structural pane — hinges only (P-17).
+    if _is_hinges_only(region):
+        return None
+
     ps = region.get("paneSpec")
     if not ps:
         return None
@@ -292,7 +304,7 @@ def _compute_jali_pane_structure(region: dict, rates: RateDict) -> Optional[dict
     Jali-side structural pane of a double shutter (§5.7) — a second, fully-priced
     leaf: pane_RF × jali-side material rate (P-14).
     """
-    if not _is_double_shutter(region):
+    if not _is_double_shutter(region) or _is_hinges_only(region):
         return None
 
     mat = (region.get("paneSpec") or {}).get("jaliMaterial")
@@ -314,6 +326,11 @@ def _compute_infill(region: dict, rates: RateDict) -> Optional[dict]:
     """
     ps = region.get("paneSpec")
     if not ps:
+        return None
+
+    # Customer-supplied shutter (§5.8): no infill — the customer's shutter carries
+    # its own glass/jali (P-17).
+    if _is_hinges_only(region):
         return None
 
     if ps.get("infillType") != "jali" and not _is_double_shutter(region):
@@ -347,6 +364,10 @@ def _compute_beading(region: dict, rates: RateDict) -> Optional[dict]:
     if not ps:
         return None
 
+    # Customer-supplied shutter (§5.8): no beading (P-17).
+    if _is_hinges_only(region):
+        return None
+
     if _is_double_shutter(region):
         sides = int(bool(ps.get("hasBeading"))) + int(bool(ps.get("jaliBeading")))
     else:
@@ -378,7 +399,8 @@ def _compute_grill(overlay: dict, region: dict, rates: RateDict) -> Optional[dic
     Grill pricing — MS and SS are completely different models (§6 rule 11).
 
     MS grill (§6.1): area-based = width × height × rate/sqft (leaf only).
-    SS grill (§6.2): bar-count = ((2 × height) − 2) × width × rate/RFT.
+    SS grill (§6.2): whole-bar count = max(0, round(2 × height − 2)) plus the
+        overlay's manual barAdjust delta (§6.2A), × width × rate/RFT.
         Uses the attached region's full dimensions (continuity model).
     """
     material = overlay.get("material")
@@ -400,20 +422,26 @@ def _compute_grill(overlay: dict, region: dict, rates: RateDict) -> Optional[dic
             "cost": cost,
         }
     else:
-        # SS grill: bar-count formula
-        bars = _round2((2 * h) - 2)
+        # SS grill: whole-bar count + optional manual delta (§6.2 / §6.2A).
+        # Drawn bars always equal billed bars.
+        auto_bars = ss_grill_auto_bars(h)
+        bar_adjust = grill_bar_adjust(overlay)
+        bars = max(0, auto_bars + bar_adjust)
         total_rft = _round2(bars * w)
         rate = _lookup_rate(f"GRILL_{material}", rates)
         cost = _round2(total_rft * rate)
 
         mat_label = "SS Pipe Round" if material == "SS_PIPE_ROUND" else "SS Pipe Square"
+        adj_note = f" (auto {auto_bars} {bar_adjust:+d})" if bar_adjust else ""
         return {
             "label": f"{mat_label} Grill",
-            "description": f"{int(bars)} bars × {w}ft = {total_rft} RFT × ₹{rate}/RFT",
+            "description": f"{bars} bars{adj_note} × {w}ft = {total_rft} RFT × ₹{rate}/RFT",
             "quantity": total_rft,
             "unit": "RFT",
             "rate": rate,
             "cost": cost,
+            "bars": bars,
+            "bar_adjust": bar_adjust,
         }
 
 
@@ -479,7 +507,7 @@ def _walk_regions(region: dict, rates: RateDict, counter: list[int]) -> list[dic
         "region_id": str(region.get("id", "")),
         "region_label": "",
         "region_type": rt or "branch",
-        "dimensions": f"{_fmt_ft(h)}ft × {_fmt_ft(w)}ft",
+        "dimensions": f"{fmt_ft_in(h)} × {fmt_ft_in(w)}",
         "pane_structure": None,
         "pane_structure_2": None,
         "infill": None,
@@ -702,7 +730,7 @@ def price_estimate(
         subtotal += line_total
         frame_lines.append({
             "name": f.get("name", "Frame"),
-            "dimensions": f"{tree['frame']['width']}ft × {tree['frame']['height']}ft",
+            "dimensions": f"{fmt_ft_in(tree['frame']['width'])} × {fmt_ft_in(tree['frame']['height'])}",
             "section": f"{tree.get('sectionSize', '')}\" {tree.get('gauge', '')}".strip(),
             "quantity": qty,
             "unit_subtotal": unit_subtotal,

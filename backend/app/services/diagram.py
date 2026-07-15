@@ -8,6 +8,9 @@ symbol, grill overlays, void hatch and the in-concrete ground band.
 """
 from xml.sax.saxutils import escape
 
+from app.services.grill import grill_bar_adjust, ss_grill_bar_offsets
+from app.services.units import fmt_ft_in
+
 # Region tints — match canvasDraw.regionFill/regionStroke (fill is faint, like the editor).
 _FILL = {
     "shutter": ("#f59e0b", 0.08), "door": ("#ef4444", 0.08), "fixed": ("#22c55e", 0.06),
@@ -39,12 +42,6 @@ def _collect(region, regions, splits):
         regions.append({**region, "_branchWithGrill": True})
     for child in split.get("children", []):
         _collect(child, regions, splits)
-
-
-def _fmt_ft(n) -> str:
-    """Round drift and drop trailing zeros (matches lib/format.fmtFt)."""
-    v = round(float(n) * 100) / 100
-    return f"{v:g}"
 
 
 def tree_to_svg(tree: dict, width: int = 360, height: int = 270) -> str:
@@ -118,9 +115,9 @@ def tree_to_svg(tree: dict, width: int = 360, height: int = 270) -> str:
                     f'fill-opacity="0.75" font-family="monospace">{escape(tag)}</text>'
                 )
 
-            # Dimension label (height×width), centered, when the region is big enough.
+            # Dimension label (height×width, ft-in), centered, when the region is big enough.
             if rw > 40 and rh > 24:
-                label = f'{_fmt_ft(region["height"])}×{_fmt_ft(region["width"])}'
+                label = f'{fmt_ft_in(region["height"])}×{fmt_ft_in(region["width"])}'
                 parts.append(
                     f'<text x="{round(rx + rw / 2, 1)}" y="{round(ry + rh / 2 + 3, 1)}" '
                     f'font-size="10" fill="#6b7280" font-family="monospace" '
@@ -130,7 +127,7 @@ def tree_to_svg(tree: dict, width: int = 360, height: int = 270) -> str:
             # Grill overlay.
             overlays = region.get("overlays") or []
             if overlays:
-                parts.extend(_grill_svg(overlays[0].get("material"), rx, ry, rw, rh, region["height"]))
+                parts.extend(_grill_svg(overlays[0], rx, ry, rw, rh, region["height"]))
 
             # Void hatch for intentional open regions.
             if is_leaf and rt == "open":
@@ -186,9 +183,10 @@ def _void_hatch_svg(x, y, w, h) -> list[str]:
     return out
 
 
-def _grill_svg(material, x, y, w, h, region_h_ft) -> list[str]:
+def _grill_svg(overlay, x, y, w, h, region_h_ft) -> list[str]:
     """Grill pattern (matches canvasDraw.GrillOverlay)."""
     out = []
+    material = overlay.get("material")
     if material == "MS_SQUARE":
         step = 8
         i = step
@@ -207,11 +205,12 @@ def _grill_svg(material, x, y, w, h, region_h_ft) -> list[str]:
             i += step
         return out
 
-    # Horizontal bars (SS pipe / jali).
-    bars = max(1, int(2 * region_h_ft - 2 + 0.5))
-    gap = h / (bars + 1)
-    for k in range(1, bars + 1):
-        ly = round(y + gap * k, 1)
+    # Horizontal SS bars: drawn count = billed count, at the spec's derived
+    # pitch so regions of different heights show the same spacing (§6.2).
+    if not region_h_ft:
+        return out
+    for off_ft in ss_grill_bar_offsets(region_h_ft, grill_bar_adjust(overlay)):
+        ly = round(y + h * (off_ft / region_h_ft), 1)
         out.append(
             f'<line x1="{round(x + 2, 1)}" y1="{ly}" x2="{round(x + w - 2, 1)}" y2="{ly}" '
             f'stroke="#93c5fd" stroke-opacity="0.5" stroke-width="1.5"/>'

@@ -4,10 +4,12 @@
  * When nothing selected: shows tree-level design info.
  */
 import { useState } from 'react'
-import { Scissors, X, Plus } from 'lucide-react'
+import { Scissors, X, Plus, Minus, Copy, ClipboardPaste, Layers, RotateCcw } from 'lucide-react'
 import toast from 'react-hot-toast'
-import useEditorStore, { windowHingeCount } from '../store/editorStore'
-import { fmtFt } from '../lib/format'
+import useEditorStore, { doorHingeCount, windowHingeCount } from '../store/editorStore'
+import { fmtFtIn } from '../lib/format'
+import { grillBarAdjust, ssGrillAutoBars, ssGrillBarCount, ssGrillMaxBars } from '../lib/grill'
+import DimensionInput from './DimensionInput'
 
 const REGION_TYPES = [
   { value: 'open',    label: 'Open', color: '#8b949e' },
@@ -70,13 +72,15 @@ function SplitControls({ regionId }) {
   )
 }
 
-const MaterialSelect = ({ label, value, onChange }) => (
+const MaterialSelect = ({ label, value, onChange, allowHingesOnly = false }) => (
   <div className="form-group">
     <label>{label}</label>
     <select value={value || ''} onChange={(e) => onChange(e.target.value || null)}>
       <option value="">Select...</option>
       <option value="MS_PIPE">MS Pipe</option>
       <option value="GP_SHEET">GP Sheet</option>
+      {/* §5.8: customer-supplied shutter — hinges only, no pane/infill/beading */}
+      {allowHingesOnly && <option value="HINGES_ONLY">No Shutter, only Hinges</option>}
     </select>
   </div>
 )
@@ -86,21 +90,40 @@ function PaneSpecEditor({ region }) {
   const ps = region.paneSpec || { shutterConfig: 'single', shutterMaterial: null, infillType: 'none', hasBeading: false, jaliMaterial: null, jaliBeading: false }
   const rt = region.regionType
   const isDouble = rt === 'shutter' && ps.shutterConfig === 'double'
+  // §5.8: HINGES_ONLY = customer-supplied shutter; we charge hinges only.
+  const isHingesOnly = rt === 'shutter' && ps.shutterMaterial === 'HINGES_ONLY'
 
   const update = (patch) =>
     updateRegion(region.id, { paneSpec: { ...ps, ...patch } })
 
-  // Single ⇄ double shuttering (spec §10.4A). Double = a glass shutter on one
-  // face of the frame + a jali shutter on the other; it forces glass infill and
-  // auto-adds the jali-side (back) hinge set per HW-9. Back to single clears
-  // the jali fields and strips back-side hardware.
+  // Selecting the shutter material. HINGES_ONLY (§5.8) is customer-supplied:
+  // clear infill/beading/jali so only hinges remain (V-21). Leaving HINGES_ONLY
+  // while double restores the fabricated-double invariant (glass side implied).
+  const setShutterMaterial = (v) => {
+    if (v === 'HINGES_ONLY') {
+      update({ shutterMaterial: v, infillType: 'none', hasBeading: false, jaliMaterial: null, jaliBeading: false })
+    } else if (ps.shutterConfig === 'double') {
+      update({ shutterMaterial: v, infillType: 'glass' })
+    } else {
+      update({ shutterMaterial: v })
+    }
+  }
+
+  // Single ⇄ double shuttering (spec §10.4A). Fabricated double = a glass shutter
+  // on one face + a jali shutter on the other (forces glass infill). A HINGES_ONLY
+  // double (§5.8) is customer-supplied on both faces (no infill). Either way the
+  // jali-side (back) hinge set is auto-added per HW-9; back to single clears the
+  // jali fields and strips back-side hardware.
   const setConfig = (config) => {
     if (config === (ps.shutterConfig || 'single')) return
     const hardware = region.hardware || []
     if (config === 'double') {
       const hasBackHinge = hardware.some((h) => h.hardwareType === 'hinge' && h.side === 'back')
+      const nextPane = isHingesOnly
+        ? { ...ps, shutterConfig: 'double' }                    // customer-supplied: no glass infill
+        : { ...ps, shutterConfig: 'double', infillType: 'glass' }
       updateRegion(region.id, {
-        paneSpec: { ...ps, shutterConfig: 'double', infillType: 'glass' },
+        paneSpec: nextPane,
         hardware: hasBackHinge ? hardware : [
           ...hardware,
           { id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G', quantity: windowHingeCount(region.height), autoComputed: true, side: 'back' },
@@ -127,20 +150,32 @@ function PaneSpecEditor({ region }) {
           <label>Shuttering</label>
           <div className="flex gap-2">
             <button className={`btn btn-sm w-full ${!isDouble ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setConfig('single')}>Single</button>
-            <button className={`btn btn-sm w-full ${isDouble ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setConfig('double')}>Double (glass + jali)</button>
+            <button className={`btn btn-sm w-full ${isDouble ? 'btn-primary' : 'btn-secondary'}`} onClick={() => setConfig('double')}>{isHingesOnly ? 'Double' : 'Double (glass + jali)'}</button>
           </div>
-          {isDouble && (
+          {isDouble && !isHingesOnly && (
             <p className="text-xs text-muted" style={{ marginTop: 6, lineHeight: 1.5 }}>
               Glass shutter on one side of the frame, jali shutter on the other — both panes fully priced, each hinged separately.
+            </p>
+          )}
+          {isDouble && isHingesOnly && (
+            <p className="text-xs text-muted" style={{ marginTop: 6, lineHeight: 1.5 }}>
+              Customer supplies a shutter on each face; we hinge both sides.
             </p>
           )}
         </div>
       )}
 
-      {isDouble ? (
+      {rt === 'shutter' && (
+        <MaterialSelect label={isDouble && !isHingesOnly ? 'Glass Shutter Material' : 'Shutter Material'}
+          value={ps.shutterMaterial} allowHingesOnly onChange={setShutterMaterial} />
+      )}
+
+      {isHingesOnly ? (
+        <p className="text-xs text-muted" style={{ lineHeight: 1.5 }}>
+          Customer supplies the shutter{isDouble ? 's (both faces)' : ''}; we provide hinges only. No pane, infill, or beading is charged.
+        </p>
+      ) : isDouble ? (
         <>
-          <MaterialSelect label="Glass Shutter Material" value={ps.shutterMaterial}
-            onChange={(v) => update({ shutterMaterial: v })} />
           <label className="flex items-center gap-2" style={{ cursor: 'pointer', fontSize: '0.875rem' }}>
             <input type="checkbox" checked={ps.hasBeading || false}
               onChange={(e) => update({ hasBeading: e.target.checked })} />
@@ -156,10 +191,6 @@ function PaneSpecEditor({ region }) {
         </>
       ) : (
         <>
-          {rt === 'shutter' && (
-            <MaterialSelect label="Shutter Material" value={ps.shutterMaterial}
-              onChange={(v) => update({ shutterMaterial: v })} />
-          )}
           {canHaveInfill && (
             <div className="form-group">
               <label>Infill</label>
@@ -187,24 +218,54 @@ function GrillEditor({ region }) {
   const updateRegion = useEditorStore((s) => s.updateRegion)
   const overlays = region.overlays || []
   const grill = overlays.find((o) => o.overlayType === 'grill')
+  const isSS = grill && grill.material !== 'MS_SQUARE'
+  const barAdjust = grillBarAdjust(grill)
 
   const setGrill = (material) => {
     if (!material) {
       updateRegion(region.id, { overlays: [] })
-    } else {
-      updateRegion(region.id, {
-        overlays: [{
-          id: crypto.randomUUID(),
-          type: 'overlay',
-          overlayType: 'grill',
-          material,
-        }],
-      })
+      return
     }
+    // §6.2A: the manual bar delta survives switching between SS materials.
+    const keepAdjust = isSS && material !== 'MS_SQUARE' ? barAdjust : 0
+    updateRegion(region.id, {
+      overlays: [{
+        id: crypto.randomUUID(),
+        type: 'overlay',
+        overlayType: 'grill',
+        material,
+        config: {
+          is_continuity: !region.isLeaf,
+          ...(keepAdjust ? { barAdjust: keepAdjust } : {}),
+        },
+      }],
+    })
+  }
+
+  const setAdjust = (next) => {
+    const bars = ssGrillBarCount(region.height, next)
+    if (next !== 0 && (bars < 1 || bars > ssGrillMaxBars(region.height))) return // V-20 — clamp at the stepper
+    updateRegion(region.id, {
+      overlays: [{ ...grill, config: { ...(grill.config || {}), barAdjust: next } }],
+    })
+  }
+
+  // Adding a grill is offered on fixed/shutter leaves and on branches (SS
+  // continuity) — §10.3 step 5. An existing grill elsewhere (legacy data)
+  // stays visible so it can still be removed.
+  const rt = region.regionType
+  const canAdd = !region.isLeaf || rt === 'fixed' || rt === 'shutter'
+  if (!grill && !canAdd) {
+    return <p className="text-xs text-muted">Grill applies to fixed/shutter regions only</p>
   }
 
   // MS grill only on leaves
   const showMS = region.isLeaf
+
+  const bars = ssGrillBarCount(region.height, barAdjust)
+  const autoBars = ssGrillAutoBars(region.height)
+  const maxBars = ssGrillMaxBars(region.height)
+  const rft = Math.round(bars * region.width * 100) / 100
 
   return (
     <div className="form-group">
@@ -215,6 +276,35 @@ function GrillEditor({ region }) {
         <option value="SS_PIPE_ROUND">SS Pipe Round</option>
         <option value="SS_PIPE_SQUARE">SS Pipe Square</option>
       </select>
+
+      {/* Billed bar count — always the same bars the canvas draws (§6.2/§6.2A) */}
+      {isSS && (
+        <div style={{ marginTop: 8 }}>
+          <label>Bars</label>
+          <div className="flex gap-2" style={{ alignItems: 'center' }}>
+            <button className="btn btn-sm btn-secondary btn-icon" title="One bar fewer"
+              onClick={() => setAdjust(barAdjust - 1)} disabled={bars <= 1}>
+              <Minus size={13} />
+            </button>
+            <span className="text-sm" style={{ minWidth: 90, textAlign: 'center' }}>
+              {bars} bars{barAdjust !== 0 && ` (auto ${autoBars}, ${barAdjust > 0 ? '+' : ''}${barAdjust})`}
+            </span>
+            <button className="btn btn-sm btn-secondary btn-icon" title="One bar more"
+              onClick={() => setAdjust(barAdjust + 1)} disabled={bars >= maxBars}>
+              <Plus size={13} />
+            </button>
+            {barAdjust !== 0 && (
+              <button className="btn btn-sm btn-ghost btn-icon" title="Reset to auto count"
+                onClick={() => setAdjust(0)}>
+                <RotateCcw size={13} />
+              </button>
+            )}
+          </div>
+          <p className="text-xs text-muted" style={{ marginTop: 4 }}>
+            {bars} × {fmtFtIn(region.width)} = {rft} RFT billed
+          </p>
+        </div>
+      )}
     </div>
   )
 }
@@ -407,13 +497,13 @@ function AddWindowEditor({ region }) {
       <div className="flex gap-3">
         {!isTop && (
           <div className="form-group" style={{ flex: 1 }}>
-            <label>Width (ft)</label>
-            <input type="number" min="0.5" step="0.5" value={width} onChange={(e) => setWidth(e.target.value)} />
+            <label>Width</label>
+            <DimensionInput value={width} onCommit={(v) => setWidth(v)} title={'Decimal feet or ft-in (e.g. 2\'6")'} />
           </div>
         )}
         <div className="form-group" style={{ flex: 1 }}>
-          <label>Height (ft)</label>
-          <input type="number" min="0.5" step="0.5" value={height} onChange={(e) => setHeight(e.target.value)} />
+          <label>Height</label>
+          <DimensionInput value={height} onCommit={(v) => setHeight(v)} title={'Decimal feet or ft-in (e.g. 4\'6")'} />
         </div>
       </div>
       {!isTop && (
@@ -445,12 +535,79 @@ function AddWindowEditor({ region }) {
   )
 }
 
+// Exact mullion/transom position editor for a selected branch (split) region.
+// The offset is measured from the parent's left (vertical) or top (horizontal)
+// edge; typing a value snaps to the 3" grid like a drag would.
+function SplitPositionEditor({ region }) {
+  const setSplitPosition = useEditorStore((s) => s.setSplitPosition)
+  const vertical = region.split.direction === 'vertical'
+  const axis = vertical ? region.width : region.height
+  const offset = axis * region.split.position
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div className="form-group">
+        <label>{vertical ? 'Offset from left edge' : 'Offset from top edge'}</label>
+        <DimensionInput
+          value={offset}
+          onCommit={(v) => setSplitPosition(region.id, v / axis, { history: true })}
+          title={'Decimal feet or ft-in (e.g. 2\'6") — snaps to 3"'}
+        />
+      </div>
+      <div className="flex justify-between" style={{ fontSize: '0.8125rem', color: 'var(--c-text-muted)' }}>
+        <span>{vertical ? 'Left panel' : 'Top panel'}</span>
+        <span className="font-mono">{fmtFtIn(offset)}</span>
+      </div>
+      <div className="flex justify-between" style={{ fontSize: '0.8125rem', color: 'var(--c-text-muted)' }}>
+        <span>{vertical ? 'Right panel' : 'Bottom panel'}</span>
+        <span className="font-mono">{fmtFtIn(axis - offset)}</span>
+      </div>
+    </div>
+  )
+}
+
+// Copy the selected leaf's spec, paste onto it, or sweep the clipboard across
+// every leaf of the same region type (one undo step).
+function ClipboardSection({ region }) {
+  const clipboard = useEditorStore((s) => s.clipboard)
+  const copyRegion = useEditorStore((s) => s.copyRegion)
+  const pasteOnto = useEditorStore((s) => s.pasteOnto)
+  const pasteOntoAllSimilar = useEditorStore((s) => s.pasteOntoAllSimilar)
+
+  const applyAll = () => {
+    const n = pasteOntoAllSimilar()
+    if (n > 0) toast.success(`Applied to ${n} ${clipboard.regionType} region${n > 1 ? 's' : ''}`)
+    else toast.error(`No ${clipboard.regionType} regions to apply to`)
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <button className="btn btn-secondary btn-sm w-full"
+        onClick={() => { if (copyRegion(region.id)) toast.success('Region copied') }}>
+        <Copy size={13} /> Copy region spec (Ctrl+C)
+      </button>
+      {clipboard && (
+        <>
+          <button className="btn btn-secondary btn-sm w-full" onClick={() => pasteOnto(region.id)}>
+            <ClipboardPaste size={13} /> Paste here (Ctrl+V)
+          </button>
+          <button className="btn btn-secondary btn-sm w-full" onClick={applyAll}
+            title="Apply the copied type, pane, grill and hardware to every region of the same type">
+            <Layers size={13} /> Apply to all {clipboard.regionType} regions
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function PropertiesPanel() {
   const tree = useEditorStore((s) => s.tree)
   const selectedId = useEditorStore((s) => s.selectedId)
   const updateRegion = useEditorStore((s) => s.updateRegion)
   const collapseRegion = useEditorStore((s) => s.collapseRegion)
   const deselect = useEditorStore((s) => s.deselect)
+  const setFrameSize = useEditorStore((s) => s.setFrameSize)
 
   if (!tree) return null
 
@@ -461,24 +618,33 @@ export default function PropertiesPanel() {
       <div>
         <div className="panel-section">
           <div className="panel-title">Design Info</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.875rem' }}>
-            <div className="flex justify-between">
-              <span className="text-muted">Width</span>
-              <span className="font-mono">{tree.outerWidth}ft</span>
+          <div className="flex gap-3">
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>Width</label>
+              <DimensionInput
+                value={tree.outerWidth}
+                onCommit={(v) => setFrameSize(v, tree.outerHeight, { history: true })}
+                title={'Decimal feet or ft-in (e.g. 5\'6") — snaps to 3"'}
+              />
             </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Height</span>
-              <span className="font-mono">{tree.outerHeight}ft</span>
+            <div className="form-group" style={{ flex: 1 }}>
+              <label>Height</label>
+              <DimensionInput
+                value={tree.outerHeight}
+                onCommit={(v) => setFrameSize(tree.outerWidth, v, { history: true })}
+                title={'Decimal feet or ft-in (e.g. 4\'6") — snaps to 3"'}
+              />
             </div>
-            <div className="flex justify-between">
-              <span className="text-muted">Section</span>
-              <span className="font-mono">{tree.sectionSize}" {tree.gauge}</span>
-            </div>
+          </div>
+          <div className="flex justify-between" style={{ fontSize: '0.875rem', marginTop: 4 }}>
+            <span className="text-muted">Section</span>
+            <span className="font-mono">{tree.sectionSize}" {tree.gauge}</span>
           </div>
         </div>
         <div className="panel-section">
           <p className="text-xs text-muted" style={{ lineHeight: 1.6 }}>
             Click a region on the canvas to select it and edit its properties.
+            Click a mullion to set its exact position.
           </p>
         </div>
       </div>
@@ -490,15 +656,23 @@ export default function PropertiesPanel() {
       {/* Header */}
       <div className="panel-section">
         <div className="flex items-center justify-between" style={{ marginBottom: 8 }}>
-          <div className="panel-title">Selected Region</div>
+          <div className="panel-title">{selected.isLeaf ? 'Selected Region' : 'Selected Split'}</div>
           <button className="btn btn-ghost btn-icon" style={{ padding: 2 }} onClick={deselect}>
             <X size={14} />
           </button>
         </div>
         <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-muted)', fontFamily: 'var(--font-mono)' }}>
-          {fmtFt(selected.height)}ft × {fmtFt(selected.width)}ft
+          {fmtFtIn(selected.height)} × {fmtFtIn(selected.width)}
         </div>
       </div>
+
+      {/* Exact mullion/transom position (branch only) */}
+      {!selected.isLeaf && selected.split && (
+        <div className="panel-section">
+          <div className="panel-title">{selected.split.direction === 'vertical' ? 'Mullion Position' : 'Transom Position'}</div>
+          <SplitPositionEditor region={selected} />
+        </div>
+      )}
 
       {/* Region Type (leaf only) */}
       {selected.isLeaf && (
@@ -513,11 +687,19 @@ export default function PropertiesPanel() {
                 onClick={() => updateRegion(selected.id, {
                   regionType: rt.value,
                   paneSpec: null,
-                  hardware: [],
+                  // §10.3 steps 2–3: switching TO shutter/door auto-adds hinges (R-4/R-5).
+                  hardware: rt.value === 'shutter' || rt.value === 'door'
+                    ? [{
+                        id: crypto.randomUUID(), type: 'hardware', hardwareType: 'hinge', variant: 'SS_12G',
+                        quantity: (rt.value === 'door' ? doorHingeCount : windowHingeCount)(selected.height),
+                        autoComputed: true, side: 'front',
+                      }]
+                    : [],
                   doorHand: null,
                   rebate: 'single',
-                  // A door has no pane or grill (§4A.2) — drop any overlay when switching to door.
-                  ...(rt.value === 'door' ? { overlays: [] } : {}),
+                  // §10.3 step 5: the grill survives only on fixed/shutter — an open
+                  // void or louver carries no grill, and a door never does (§4A.2).
+                  ...(rt.value === 'fixed' || rt.value === 'shutter' ? {} : { overlays: [] }),
                 })}
               >
                 {rt.label}
@@ -564,6 +746,14 @@ export default function PropertiesPanel() {
         <div className="panel-section">
           <div className="panel-title">Hardware</div>
           <HardwareEditor region={selected} />
+        </div>
+      )}
+
+      {/* Copy / paste / bulk apply */}
+      {selected.isLeaf && (
+        <div className="panel-section">
+          <div className="panel-title">Copy &amp; Paste</div>
+          <ClipboardSection region={selected} />
         </div>
       )}
 

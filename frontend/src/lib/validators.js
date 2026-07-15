@@ -7,6 +7,33 @@
  * Returns an array of { id, message } issues. Empty array = valid.
  */
 import { dimLabel } from './format'
+import { grillBarAdjust, ssGrillAutoBars, ssGrillBarCount, ssGrillMaxBars } from './grill'
+
+// V-20 (§6.2A): manual bar delta is SS-only and, when non-zero, must keep the
+// effective count within 1 … floor(height × 6). Mirrors the server rule.
+function pushGrillAdjustIssues(region, issues) {
+  const label = dimLabel(region)
+  for (const overlay of region.overlays || []) {
+    const adjust = grillBarAdjust(overlay)
+    if (!adjust) continue
+    if (!Number.isInteger(adjust)) {
+      issues.push({ id: region.id, message: `Grill bar adjustment on ${label} must be a whole number` })
+      continue
+    }
+    if (overlay.material === 'MS_SQUARE') {
+      issues.push({ id: region.id, message: `Bar adjustment on ${label} — MS grill has no bar count` })
+      continue
+    }
+    const bars = ssGrillBarCount(region.height, adjust)
+    const maxBars = ssGrillMaxBars(region.height)
+    if (bars < 1 || bars > maxBars) {
+      issues.push({
+        id: region.id,
+        message: `Grill on ${label} must have 1–${maxBars} bars (auto ${ssGrillAutoBars(region.height)} ${adjust > 0 ? '+' : ''}${adjust} = ${bars})`,
+      })
+    }
+  }
+}
 
 function pushLeafIssues(region, issues) {
   const rt = region.regionType
@@ -30,13 +57,17 @@ function pushLeafIssues(region, issues) {
     issues.push({ id: region.id, message: `shutter ${label} needs a shutter material` })
   }
 
-  // V-19: double shuttering (§5.7) — shutter regions only; the jali side needs a
-  // material; the explicit infill is the glass side
+  // HINGES_ONLY (§5.8): customer-supplied shutter — we charge hinges only.
+  const isHingesOnly = rt === 'shutter' && ps.shutterMaterial === 'HINGES_ONLY'
+
+  // V-19: double shuttering (§5.7) — shutter regions only; a FABRICATED double
+  // needs a jali-side material and glass infill. A HINGES_ONLY double (§5.8) is
+  // exempt — see V-21.
   const isDoubleShutter = rt === 'shutter' && ps.shutterConfig === 'double'
   if (ps.shutterConfig === 'double') {
     if (rt !== 'shutter') {
       issues.push({ id: region.id, message: `Double shuttering on ${rt} ${label} — only shutter regions can be double-shuttered` })
-    } else {
+    } else if (!isHingesOnly) {
       if (!ps.jaliMaterial) {
         issues.push({ id: region.id, message: `Double shutter ${label} needs a jali-side material` })
       }
@@ -46,6 +77,20 @@ function pushLeafIssues(region, issues) {
     }
   } else if (ps.jaliMaterial || ps.jaliBeading) {
     issues.push({ id: region.id, message: `Jali-side pane fields on ${label} require double shuttering` })
+  }
+
+  // V-21: a HINGES_ONLY shutter (§5.8) is customer-supplied — no infill, no
+  // beading, no jali-side material
+  if (isHingesOnly) {
+    if (ps.infillType && ps.infillType !== 'none') {
+      issues.push({ id: region.id, message: `Customer-supplied shutter ${label} cannot have infill` })
+    }
+    if (ps.hasBeading || ps.jaliBeading) {
+      issues.push({ id: region.id, message: `Customer-supplied shutter ${label} cannot have beading` })
+    }
+    if (ps.jaliMaterial) {
+      issues.push({ id: region.id, message: `Customer-supplied shutter ${label} cannot have a jali-side material` })
+    }
   }
 
   // V-18: door regions carry hardware only — no pane (material/infill/beading) or grill
@@ -100,6 +145,9 @@ function pushLeafIssues(region, issues) {
       issues.push({ id: region.id, message: `Grill on ${label} needs a material` })
     }
   }
+
+  // V-20: manual bar adjustment bounds (§6.2A)
+  pushGrillAdjustIssues(region, issues)
 }
 
 function pushBranchIssues(region, issues) {
@@ -110,6 +158,8 @@ function pushBranchIssues(region, issues) {
       issues.push({ id: region.id, message: `MS grill can't sit on split region ${label}` })
     }
   }
+  // V-20: manual bar adjustment bounds (§6.2A) — SS continuity grills too
+  pushGrillAdjustIssues(region, issues)
 }
 
 function walk(region, issues) {

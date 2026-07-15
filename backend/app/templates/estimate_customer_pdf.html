@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<style>
+  @page { size: A4; margin: 1.6cm 1.4cm; }
+  * { box-sizing: border-box; }
+  body { font-family: "Helvetica Neue", Arial, sans-serif; color: #1f2937; font-size: 11px; }
+  h1, h2, h3 { margin: 0; }
+  .header { display: flex; justify-content: space-between; align-items: flex-start;
+            border-bottom: 3px solid #2563eb; padding-bottom: 12px; margin-bottom: 18px; }
+  .brand { font-size: 22px; font-weight: 800; color: #2563eb; letter-spacing: -0.5px; }
+  .brand-sub { color: #6b7280; font-size: 10px; margin-top: 2px; }
+  .doc-meta { text-align: right; }
+  .doc-meta .title { font-size: 16px; font-weight: 700; }
+  .doc-meta .num { color: #2563eb; font-weight: 700; font-size: 13px; }
+  .doc-meta .date { color: #6b7280; margin-top: 4px; }
+
+  .parties { display: flex; justify-content: space-between; margin-bottom: 18px; gap: 20px; }
+  .party { flex: 1; }
+  .party .label { text-transform: uppercase; font-size: 9px; letter-spacing: 0.06em; color: #9ca3af; margin-bottom: 4px; }
+  .party .name { font-weight: 700; font-size: 12px; }
+  .party div { line-height: 1.5; }
+
+  table { width: 100%; border-collapse: collapse; }
+  .ta-r { text-align: right; }
+  .mono { font-variant-numeric: tabular-nums; }
+
+  /* Frame cards — one self-contained block per frame: diagram | specs | price.
+     Table layout (not flexbox): WeasyPrint sizes tables reliably, flex children
+     ignore min-width and can push cells off the page (see estimate_pdf.html). */
+  .card { width: 100%; table-layout: fixed; border: 1px solid #e5e7eb;
+          margin-bottom: 10px; page-break-inside: avoid; }
+  .card td { padding: 10px 12px; vertical-align: top; border: none; }
+  .card td.c-diagram { width: 126px; background: #fcfcfd; border-right: 1px solid #f3f4f6; text-align: center; }
+  .card td.c-diagram img, .card td.c-diagram svg { max-width: 102px; max-height: 132px; }
+  .card td.c-price { width: 148px; text-align: right; border-left: 1px solid #f3f4f6; }
+  .cname { font-weight: 700; font-size: 12px; color: #111827; margin-bottom: 4px; }
+  .cmeta { color: #4b5563; margin-bottom: 6px; }
+  .cspec { color: #6b7280; font-size: 10px; line-height: 1.55; word-wrap: break-word; overflow-wrap: break-word; }
+  .cqty { color: #6b7280; font-size: 10px; margin-bottom: 4px; }
+  .camt { font-weight: 700; font-size: 13px; color: #2563eb; }
+
+  .totals { margin-top: 18px; margin-left: auto; width: 48%; }
+  .totals td { padding: 5px 9px; }
+  .totals .row td { border-bottom: 1px solid #eef0f2; }
+  .totals .grand td { background: #2563eb; color: #fff; font-weight: 700; font-size: 13px; padding: 9px; }
+  .totals .advance td { color: #2563eb; font-weight: 700; }
+
+  .notes { margin-top: 20px; padding: 10px 12px; background: #f9fafb; border-left: 3px solid #2563eb; font-size: 10px; color: #4b5563; }
+  .footer { margin-top: 26px; text-align: center; color: #9ca3af; font-size: 8.5px;
+            border-top: 1px solid #e5e7eb; padding-top: 8px; }
+</style>
+</head>
+<body>
+  <div class="header">
+    <div style="display:flex; align-items:flex-start; gap:12px;">
+      {% if company.logo_data_url %}<img src="{{ company.logo_data_url }}" style="max-height:54px; max-width:160px;" />{% endif %}
+      <div>
+        <div class="brand">{{ company.name }}</div>
+        <div class="brand-sub">Steel Doors &amp; Windows</div>
+        {% if company.address %}<div class="brand-sub">{{ company.address }}</div>{% endif %}
+        <div class="brand-sub">
+          {% if company.phone %}{{ company.phone }}{% endif %}
+          {% if company.email %} · {{ company.email }}{% endif %}
+          {% if company.gstin %} · GSTIN: {{ company.gstin }}{% endif %}
+        </div>
+      </div>
+    </div>
+    <div class="doc-meta">
+      <div class="title">QUOTATION</div>
+      <div class="num">EST-{{ "%04d"|format(estimate.number) }}{% if estimate.revision and estimate.revision > 1 %} rev {{ estimate.revision }}{% endif %}</div>
+      <div class="date">Date: {{ estimate.quote_date }}</div>
+      {% if estimate.valid_until %}<div class="date">Valid until: {{ estimate.valid_until }}</div>{% endif %}
+    </div>
+  </div>
+
+  <div class="parties">
+    <div class="party">
+      <div class="label">Quotation For</div>
+      <div class="name">{{ customer.name }}</div>
+      {% if customer.company %}<div>{{ customer.company }}</div>{% endif %}
+      {% if customer.address %}<div>{{ customer.address }}</div>{% endif %}
+      {% if customer.phone %}<div>Phone: {{ customer.phone }}</div>{% endif %}
+      {% if customer.email %}<div>{{ customer.email }}</div>{% endif %}
+      {% if customer.gstin %}<div>GSTIN: {{ customer.gstin }}</div>{% endif %}
+    </div>
+    <div class="party" style="text-align:right;">
+      {% if estimate.title %}<div class="label">Project</div><div class="name">{{ estimate.title }}</div>{% endif %}
+    </div>
+  </div>
+
+  <!-- Frame cards: diagram + specification + qty × unit price. No component
+       costs, no bill of materials — this is the customer-facing summary. -->
+  {% for f in frames %}
+  <table class="card">
+    <tr>
+      <td class="c-diagram">{{ f.diagram_svg|safe }}</td>
+      <td>
+        <div class="cname">{{ loop.index }}. {{ f.name }}</div>
+        <div class="cmeta">Size: <strong>{{ f.dimensions }}</strong> · Section: <strong>{{ f.section }}</strong>{% if f.quantity > 1 %} · Qty: <strong>{{ f.quantity }}</strong>{% endif %}</div>
+        {% if f.spec %}<div class="cspec">{{ f.spec }}</div>{% endif %}
+      </td>
+      <td class="c-price">
+        {% if f.quantity > 1 %}
+        <div class="cqty mono">{{ f.quantity }} × {{ currency }}{{ f.unit_subtotal|money }}</div>
+        {% endif %}
+        <div class="camt mono">{{ currency }}{{ f.line_total|money }}</div>
+      </td>
+    </tr>
+  </table>
+  {% endfor %}
+  {% if not frames %}
+  <div style="text-align:center; color:#9ca3af; padding:18px; border:1px solid #e5e7eb;">No frames added yet.</div>
+  {% endif %}
+
+  <!-- Totals -->
+  <table class="totals">
+    <tr class="row"><td>Subtotal</td><td class="ta-r mono">{{ currency }}{{ estimate.subtotal|money }}</td></tr>
+    {% for c in estimate.other_charges %}
+    <tr class="row"><td>{{ c.label }}</td><td class="ta-r mono">{{ currency }}{{ c.amount|money }}</td></tr>
+    {% endfor %}
+    {% if estimate.discount_amount > 0 %}
+    <tr class="row"><td>Discount{% if estimate.discount_type == 'PERCENTAGE' %} ({{ estimate.discount_value }}%){% endif %}</td>
+        <td class="ta-r mono">− {{ currency }}{{ estimate.discount_amount|money }}</td></tr>
+    {% endif %}
+    {# Taxable-amount bridge row only when charges/discount make it differ from the subtotal #}
+    {% if estimate.other_charges or estimate.discount_amount > 0 %}
+    <tr class="row"><td>Taxable Amount</td><td class="ta-r mono">{{ currency }}{{ estimate.taxable|money }}</td></tr>
+    {% endif %}
+    <tr class="row"><td>GST ({{ estimate.gst_pct }}%)</td><td class="ta-r mono">{{ currency }}{{ estimate.gst|money }}</td></tr>
+    <tr class="grand"><td>Grand Total</td><td class="ta-r mono">{{ currency }}{{ "{:,}".format(estimate.grand_total) }}</td></tr>
+    <tr class="advance"><td>Advance payable ({{ estimate.advance_pct }}%)</td><td class="ta-r mono">{{ currency }}{{ "{:,}".format(estimate.advance_amount) }}</td></tr>
+  </table>
+
+  {% if estimate.notes %}
+  <div class="notes"><strong>Notes:</strong> {{ estimate.notes }}</div>
+  {% endif %}
+
+  {% if estimate.terms %}
+  <div class="notes"><strong>Terms &amp; Conditions:</strong> {{ estimate.terms }}</div>
+  {% endif %}
+
+  {% if company.bank_details %}
+  <div class="notes"><strong>Bank Details:</strong> {{ company.bank_details }}</div>
+  {% endif %}
+
+  <div class="footer">
+    Generated by {{ company.name }} on {{ generated_at }} · This is a computer-generated quotation.
+  </div>
+</body>
+</html>

@@ -251,6 +251,59 @@ function _relayoutKeepAbsolute(region, x, y, w, h) {
   return { ...base, split: { ...region.split, position: pos, children: [ca, cb] } }
 }
 
+/**
+ * §10.8/§10.9 step 6 — auto-computed hinge quantities track the leaf height
+ * (R-4/R-5) after any geometry change; user-overridden quantities
+ * (autoComputed: false) are left alone. Returns the same node when unchanged.
+ */
+function _refreshAutoHinges(region) {
+  if (region.isLeaf || !region.split) {
+    const rt = region.regionType
+    if ((rt !== 'shutter' && rt !== 'door') || !(region.hardware || []).length) return region
+    const count = (rt === 'door' ? doorHingeCount : windowHingeCount)(region.height)
+    let changed = false
+    const hardware = region.hardware.map((hw) => {
+      if (hw.hardwareType !== 'hinge' || !hw.autoComputed || hw.quantity === count) return hw
+      changed = true
+      return { ...hw, quantity: count }
+    })
+    return changed ? { ...region, hardware } : region
+  }
+  const children = region.split.children.map(_refreshAutoHinges)
+  return children.every((c, i) => c === region.split.children[i])
+    ? region
+    : { ...region, split: { ...region.split, children } }
+}
+
+/** relayout + auto-hinge refresh — the standard post-geometry-change pass. */
+function relayoutTree(tree) {
+  const laid = relayout(tree)
+  if (!laid?.frame) return laid
+  const root = _refreshAutoHinges(laid.frame.rootRegion)
+  return root === laid.frame.rootRegion ? laid : { ...laid, frame: { ...laid.frame, rootRegion: root } }
+}
+
+/**
+ * One-time repair when loading a saved tree: strip MS grills that an older
+ * split bug left on branch regions (illegal per V-6, would 422 on save).
+ */
+function _sanitizeRegion(region) {
+  if (region.isLeaf || !region.split) return region
+  const children = region.split.children.map(_sanitizeRegion)
+  const overlays = region.overlays || []
+  const cleaned = overlays.filter((o) => o.material !== 'MS_SQUARE')
+  if (cleaned.length === overlays.length && children.every((c, i) => c === region.split.children[i])) {
+    return region
+  }
+  return { ...region, overlays: cleaned, split: { ...region.split, children } }
+}
+
+function sanitizeTree(tree) {
+  if (!tree?.frame?.rootRegion) return tree
+  const root = _sanitizeRegion(tree.frame.rootRegion)
+  return root === tree.frame.rootRegion ? tree : { ...tree, frame: { ...tree.frame, rootRegion: root } }
+}
+
 /** Immutably apply `fn` to the region matching `regionId`. */
 function _mapRegionInTree(tree, regionId, fn) {
   return {
@@ -291,6 +344,10 @@ const useEditorStore = create((set, get) => ({
   addMode: null,
   setAddMode: (addMode) => set({ addMode }),
 
+  // Persistent per-region dimension labels on the canvas (shop-drawing style).
+  showDims: true,
+  toggleDims: () => set((s) => ({ showDims: !s.showDims })),
+
   // Snapshot taken at the start of a drag, used to record one undo step on release.
   _snapshot: null,
 
@@ -298,8 +355,12 @@ const useEditorStore = create((set, get) => ({
   livePrice: null,
 
   // ─── Tree management ────────────────────────────────────
-  initTree: (designId, tree) =>
-    set({ tree, designId, designName: tree.name, isDirty: false, selectedId: null, past: [], future: [] }),
+  initTree: (designId, tree) => {
+    // Repair trees saved while an older split bug kept MS grills on branches —
+    // dirty when changed so the cleaned tree gets saved back.
+    const cleaned = sanitizeTree(tree)
+    set({ tree: cleaned, designId, designName: tree.name, isDirty: cleaned !== tree, selectedId: null, past: [], future: [] })
+  },
 
   newTree: (name, width, height, sectionSize, gauge) => {
     const tree = makeEmptyTree(name, width, height, sectionSize, gauge)
@@ -368,7 +429,7 @@ const useEditorStore = create((set, get) => ({
     if (!region || !region.isLeaf) return
     const axis = direction === 'vertical' ? region.width : region.height
     const pos = snapOffset(axis, position)
-    const newTree = relayout(_splitRegionInTree(tree, regionId, direction, pos))
+    const newTree = relayoutTree(_splitRegionInTree(tree, regionId, direction, pos))
     get()._commit(newTree, { selectedId: null })
   },
 
@@ -384,7 +445,7 @@ const useEditorStore = create((set, get) => ({
     if (!region?.split) return
     const axis = region.split.direction === 'vertical' ? region.width : region.height
     const position = snapOffset(axis, rawPosition)
-    const laid = relayout(
+    const laid = relayoutTree(
       _mapRegionInTree(tree, regionId, (r) => ({ ...r, split: { ...r.split, position } }))
     )
     if (history) get()._commit(laid)
@@ -402,7 +463,7 @@ const useEditorStore = create((set, get) => ({
     if (!tree) return
     const width = snapFrame(rawW)
     const height = snapFrame(rawH)
-    const rootRegion = _relayoutKeepAbsolute(tree.frame.rootRegion, 0, 0, width, height)
+    const rootRegion = _refreshAutoHinges(_relayoutKeepAbsolute(tree.frame.rootRegion, 0, 0, width, height))
     const laid = {
       ...tree,
       outerWidth: width,
@@ -477,6 +538,39 @@ const useEditorStore = create((set, get) => ({
   },
 
   /**
+   * Paste the clipboard onto every leaf whose regionType matches the copied
+   * region's — one undo step for the whole sweep. Returns the number of
+   * regions updated (0 when there is nothing to paste onto).
+   */
+  pasteOntoAllSimilar: () => {
+    const { tree, clipboard } = get()
+    if (!tree || !clipboard) return 0
+    const targets = []
+    const walk = (r) => {
+      if (r.isLeaf || !r.split) {
+        if ((r.regionType ?? 'open') === clipboard.regionType) targets.push(r.id)
+        return
+      }
+      r.split.children.forEach(walk)
+    }
+    walk(tree.frame.rootRegion)
+    if (targets.length === 0) return 0
+    let newTree = tree
+    for (const id of targets) {
+      newTree = _updateRegionInTree(newTree, id, {
+        regionType: clipboard.regionType,
+        paneSpec: clipboard.paneSpec ? { ...clipboard.paneSpec } : null,
+        overlays: clipboard.overlays.map((o) => ({ ...o, id: crypto.randomUUID() })),
+        hardware: clipboard.hardware.map((h) => ({ ...h, id: crypto.randomUUID() })),
+        doorHand: clipboard.doorHand,
+        rebate: clipboard.rebate,
+      })
+    }
+    get()._commit(newTree)
+    return targets.length
+  },
+
+  /**
    * Remove all children of a branch region, making it a leaf again.
    */
   collapseRegion: (regionId) => {
@@ -515,7 +609,7 @@ const useEditorStore = create((set, get) => ({
     }
 
     const { node, windowId } = buildDoorWithWindow(door, { side, width, height, vAlign, windowType })
-    const newTree = relayout(_mapRegionInTree(tree, regionId, () => node))
+    const newTree = relayoutTree(_mapRegionInTree(tree, regionId, () => node))
     get()._commit(newTree, { selectedId: windowId })
     return true
   },
@@ -558,6 +652,11 @@ function _splitRegionNode(region, targetId, direction, position) {
       hardware: [],
       doorHand: null,        // shed door labels — this is no longer a door leaf
       rebate: 'single',
+      // R-3 / §10.1: MS grill is removed on subdivide; an SS grill is preserved
+      // as a continuity overlay spanning the new children (bar_adjust carries).
+      overlays: (region.overlays || [])
+        .filter((o) => o.material !== 'MS_SQUARE')
+        .map((o) => ({ ...o, config: { ...(o.config || {}), is_continuity: true } })),
       split: {
         id: crypto.randomUUID(),
         type: 'split',
@@ -617,7 +716,21 @@ function _collapseRegionInTree(tree, regionId) {
 
 function _collapseRegionNode(region, targetId) {
   if (region.id === targetId) {
-    return { ...region, isLeaf: true, regionType: 'open', split: null, hardware: [], paneSpec: null, overlays: [], doorHand: null, rebate: 'single' }
+    return {
+      ...region,
+      isLeaf: true,
+      regionType: 'open',
+      split: null,
+      hardware: [],
+      paneSpec: null,
+      // §10.2 step 4: an SS continuity grill survives the merge onto the
+      // now-leaf region (a branch can't legally carry MS, but filter anyway).
+      overlays: (region.overlays || [])
+        .filter((o) => o.material !== 'MS_SQUARE')
+        .map((o) => ({ ...o, config: { ...(o.config || {}), is_continuity: false } })),
+      doorHand: null,
+      rebate: 'single',
+    }
   }
   if (region.split) {
     return {

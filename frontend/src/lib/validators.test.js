@@ -181,6 +181,43 @@ describe('validateTree', () => {
     expect(issues.some(i => i.message.includes('hinge on each side'))).toBe(true)
   })
 
+  // ── Customer-supplied shutter (HINGES_ONLY, §5.8) ──
+  it('returns no issues for a single HINGES_ONLY shutter (hinges only)', () => {
+    const issues = validateTree(tree({
+      regionType: 'shutter',
+      paneSpec: { shutterMaterial: 'HINGES_ONLY', infillType: 'none' },
+      hardware: [{ hardwareType: 'hinge' }],
+    }))
+    expect(issues).toEqual([])
+  })
+
+  it('returns no issues for a double HINGES_ONLY shutter (exempt from V-19)', () => {
+    const issues = validateTree(tree({
+      regionType: 'shutter',
+      paneSpec: { shutterConfig: 'double', shutterMaterial: 'HINGES_ONLY', infillType: 'none' },
+      hardware: [{ hardwareType: 'hinge' }, { hardwareType: 'hinge', side: 'back' }],
+    }))
+    expect(issues).toEqual([])
+  })
+
+  it('returns error for a HINGES_ONLY shutter with infill', () => {
+    const issues = validateTree(tree({
+      regionType: 'shutter',
+      paneSpec: { shutterMaterial: 'HINGES_ONLY', infillType: 'glass' },
+      hardware: [{ hardwareType: 'hinge' }],
+    }))
+    expect(issues.some(i => i.message.includes('cannot have infill'))).toBe(true)
+  })
+
+  it('returns error for a HINGES_ONLY shutter with beading', () => {
+    const issues = validateTree(tree({
+      regionType: 'shutter',
+      paneSpec: { shutterMaterial: 'HINGES_ONLY', infillType: 'none', hasBeading: true },
+      hardware: [{ hardwareType: 'hinge' }],
+    }))
+    expect(issues.some(i => i.message.includes('cannot have beading'))).toBe(true)
+  })
+
   it('returns split error when a side is below 0.5ft', () => {
     const splitRegion = {
       id: 'sr',

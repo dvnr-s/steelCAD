@@ -39,6 +39,7 @@ backend/
 │   │   ├── auth.py        password hashing, JWT, get_current_user / require_admin
 │   │   ├── validation.py  validate_design_tree (INV-* / V-*)
 │   │   ├── pricing.py     price_design / price_estimate (pure, tested)
+│   │   ├── grill.py       SS grill bar math (§6.2/§6.2A) — mirrors frontend lib/grill.js
 │   │   └── pdf.py         WeasyPrint rendering
 │   └── templates/estimate_pdf.html
 ├── migrations/            Alembic environment
@@ -227,8 +228,10 @@ CRUD with search (`q` matches name/company/phone), soft delete + `POST
 | POST | `/estimates/{id}/frames` | add a frame (from a library design or a one-off tree) → recompute |
 | PUT | `/estimates/{id}/frames/{fid}` | update a frame (name / quantity / tree) → recompute |
 | POST | `/estimates/{id}/frames/{fid}/duplicate` | copy a frame within the estimate |
+| GET | `/estimates/{id}/frames/{fid}/thumbnail.svg` | server-rendered frame schematic (ETag on `estimate.updated_at`) |
 | DELETE | `/estimates/{id}/frames/{fid}` | remove a frame → recompute |
-| GET | `/estimates/{id}/pdf` | download the quotation PDF (with per-frame diagrams) |
+| GET | `/estimates/{id}/pdf` | download the internal quotation PDF (per-frame cost breakdowns + BOM) |
+| GET | `/estimates/{id}/pdf/customer` | download the customer-facing summary PDF (frame cards, no cost breakdown) |
 | GET | `/estimates/{id}/bom.csv` | download the aggregated bill of materials |
 | POST | `/price` | **stateless** price preview (used by the canvas; rate-limited) |
 
@@ -270,10 +273,17 @@ The estimate's heartbeat. On any estimate or frame mutation it:
 Because it only runs on mutation, an untouched estimate keeps its prior numbers (the
 intentional "immutable snapshot" behavior).
 
-### `generate_estimate_pdf` (pdf.py)
-Renders `estimate_pdf.html` (Jinja2, with a `money` filter for Indian-grouped numbers)
-to PDF bytes via WeasyPrint. The route streams it with a
-`Content-Disposition: attachment` header.
+### `generate_estimate_pdf` / `generate_customer_estimate_pdf` (pdf.py)
+Two parallel render paths, both Jinja2 → WeasyPrint, streamed with a
+`Content-Disposition: attachment` header (with a `money` filter for Indian-grouped
+numbers). `generate_estimate_pdf` renders `estimate_pdf.html` — the **internal**
+document with per-component costs and the BOM, used to cross-check an estimate.
+`generate_customer_estimate_pdf` renders `estimate_customer_pdf.html` — the
+**customer-facing** summary: one card per frame (diagram, dimensions, section, a
+price-free spec line derived from the frozen `unit_breakdown` *labels*, and
+qty × unit price), plus the standard totals box. It deliberately shares no code with
+the internal renderer so changes to one can never leak into the other; item
+*descriptions* (which embed ₹ rates) must never reach the customer template.
 
 ---
 
@@ -304,6 +314,7 @@ docker exec -e TEST_DATABASE_URL=postgresql+asyncpg://steelcad:steelcad@db:5432/
 Suites: `test_pricing.py` cross-checks the engine against the spec's worked examples
 (void-aware frames, single vs. double sections, the door-sill exemption, rebate
 price-neutrality, GST, rounding); `test_validation.py` covers the tree validator;
+`test_grill.py` pins the shared SS bar math (counts, pitch, offsets);
 `test_diagram.py` covers the SVG schematic renderer; `test_api.py` is the HTTP
 integration suite (auth, RBAC, estimate lifecycle, revisions, soft delete, PDF/BOM) —
 it skips itself unless `TEST_DATABASE_URL` is set. CI (`.github/workflows/ci.yml`)

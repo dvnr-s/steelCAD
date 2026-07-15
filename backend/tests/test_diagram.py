@@ -102,3 +102,73 @@ def test_render_estimate_html_includes_branding_and_fallback_diagram():
     assert "<svg" in html                        # per-frame schematic diagram embedded
     assert "EST-0007" in html
     assert "Bill of Materials" in html           # BOM section rendered
+
+
+# ─── SS grill bars: drawn = billed, same pitch in every region (§6.2) ──
+
+import re
+
+
+def _ss_grill(bar_adjust=None):
+    overlay = {"id": "g1", "type": "overlay", "overlayType": "grill", "material": "SS_PIPE_ROUND"}
+    if bar_adjust is not None:
+        overlay["config"] = {"barAdjust": bar_adjust}
+    return overlay
+
+
+def _grilled_two_row_tree(bar_adjust=None):
+    """5×10 frame split horizontally: 2.5ft grilled region above a 7.5ft grilled region."""
+    return {
+        "outerWidth": 5, "outerHeight": 10, "sectionSize": "5", "gauge": "18G",
+        "frame": {
+            "width": 5, "height": 10,
+            "rootRegion": {
+                "id": "root", "isLeaf": False, "x": 0, "y": 0, "width": 5, "height": 10,
+                "split": {
+                    "direction": "horizontal", "position": 0.25,
+                    "children": [
+                        {"id": "top", "isLeaf": True, "x": 0, "y": 0, "width": 5, "height": 2.5,
+                         "regionType": "fixed", "overlays": [_ss_grill()]},
+                        {"id": "bottom", "isLeaf": True, "x": 0, "y": 2.5, "width": 5, "height": 7.5,
+                         "regionType": "fixed", "overlays": [_ss_grill(bar_adjust)]},
+                    ],
+                },
+            },
+        },
+    }
+
+
+def _grill_bar_ys(svg):
+    """y1 of every SS grill bar line, in document order."""
+    return [float(m) for m in re.findall(r'y1="([\d.]+)"[^/]*stroke="#93c5fd"', svg)]
+
+
+def test_grill_bars_drawn_equal_billed():
+    svg = tree_to_svg(_grilled_two_row_tree())
+    ys = _grill_bar_ys(svg)
+    assert len(ys) == 3 + 13   # 2.5ft → 3 bars, 7.5ft → 13 bars
+
+
+def test_grill_bars_evenly_spaced_within_each_region():
+    """§6.2 rendering rule: bars fill each region with equal gaps, edge to edge."""
+    svg = tree_to_svg(_grilled_two_row_tree())
+    ys = _grill_bar_ys(svg)
+    for bars in (ys[:3], ys[3:]):
+        gaps = [b - a for a, b in zip(bars, bars[1:])]
+        # uniform spacing within the region (0.1px coordinate rounding)
+        assert max(gaps) - min(gaps) <= 0.25
+
+
+def test_grill_bar_adjust_changes_drawn_count():
+    svg = tree_to_svg(_grilled_two_row_tree(bar_adjust=2))
+    ys = _grill_bar_ys(svg)
+    assert len(ys) == 3 + 15   # bottom region draws its adjusted (billed) count
+
+
+def test_no_decorative_bars_on_too_short_region():
+    tree = {
+        "frame": {"width": 4, "height": 1, "rootRegion": {
+            "id": "r", "isLeaf": True, "x": 0, "y": 0, "width": 4, "height": 1,
+            "regionType": "fixed", "overlays": [_ss_grill()]}},
+    }
+    assert "#93c5fd" not in tree_to_svg(tree)

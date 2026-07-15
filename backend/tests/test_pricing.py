@@ -301,6 +301,72 @@ def test_ss_grill_continuity():
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Test: SS grill whole-bar rounding + manual bar adjustment (§6.2 / §6.2A)
+# ═══════════════════════════════════════════════════════════════════
+
+def _ss_overlay(bar_adjust: int | None = None) -> dict:
+    overlay = {"id": _uuid(), "type": "overlay", "overlayType": "grill", "material": "SS_PIPE_ROUND"}
+    if bar_adjust is not None:
+        overlay["config"] = {"barAdjust": bar_adjust}
+    return overlay
+
+
+def test_ss_grill_bars_are_whole_numbers():
+    """
+    §6.2: bars are physical objects — max(0, round(2h − 2)), never fractional.
+    h = 2.95 → 2×2.95 − 2 = 3.9 → 4 bars; RFT = 4 × 4 = 16; cost = 16 × 90.
+    """
+    root = _leaf_region(width=4.0, height=2.95, region_type="fixed", overlays=[_ss_overlay()])
+    tree = _design_tree(4.0, 2.95, root)
+    grill = price_design(tree, RATES)["regions"][0]["grill"]
+    assert grill["bars"] == 4
+    assert grill["quantity"] == 16.0
+    assert grill["cost"] == 1440.0
+
+
+def test_ss_grill_zero_bars_when_too_short():
+    """h ≤ 1 ft → auto count 0 → nothing billed (and nothing drawn)."""
+    root = _leaf_region(width=4.0, height=1.0, region_type="fixed", overlays=[_ss_overlay()])
+    tree = _design_tree(4.0, 1.0, root)
+    grill = price_design(tree, RATES)["regions"][0]["grill"]
+    assert grill["bars"] == 0
+    assert grill["quantity"] == 0.0
+    assert grill["cost"] == 0.0
+
+
+def test_ss_grill_manual_bar_adjust_up():
+    """§6.2A: 5ft-tall region, barAdjust +2 → 8 auto + 2 = 10 bars, billed as shown."""
+    root = _leaf_region(width=4.0, height=5.0, region_type="fixed", overlays=[_ss_overlay(2)])
+    tree = _design_tree(4.0, 5.0, root)
+    grill = price_design(tree, RATES)["regions"][0]["grill"]
+    assert grill["bars"] == 10
+    assert grill["bar_adjust"] == 2
+    assert grill["quantity"] == 40.0   # 10 bars × 4ft
+    assert grill["cost"] == 3600.0     # 40 × 90
+    assert "(auto 8 +2)" in grill["description"]
+
+
+def test_ss_grill_manual_bar_adjust_down():
+    """§6.2A: barAdjust −3 → 8 auto − 3 = 5 bars."""
+    root = _leaf_region(width=4.0, height=5.0, region_type="fixed", overlays=[_ss_overlay(-3)])
+    tree = _design_tree(4.0, 5.0, root)
+    grill = price_design(tree, RATES)["regions"][0]["grill"]
+    assert grill["bars"] == 5
+    assert grill["quantity"] == 20.0
+    assert grill["cost"] == 1800.0
+    assert "(auto 8 -3)" in grill["description"]
+
+
+def test_ss_grill_unadjusted_description_has_no_auto_note():
+    root = _leaf_region(width=4.0, height=5.0, region_type="fixed", overlays=[_ss_overlay()])
+    tree = _design_tree(4.0, 5.0, root)
+    grill = price_design(tree, RATES)["regions"][0]["grill"]
+    assert grill["bar_adjust"] == 0
+    assert "auto" not in grill["description"]
+    assert grill["description"].startswith("8 bars ×")
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Test: Door region with GP sheet, hinges, lock
 # ═══════════════════════════════════════════════════════════════════
 
@@ -466,6 +532,59 @@ def test_single_shutter_unaffected_by_double_fields():
     assert region["pane_structure_2"] is None
     assert region["infill"] is None
     assert region["subtotal"] == 1400.0 + 240.0
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Test: Customer-supplied shutter (§5.8) — HINGES_ONLY, hinges are the only cost
+# ═══════════════════════════════════════════════════════════════════
+
+def test_hinges_only_single():
+    """
+    §5.8 worked example: shutter 3×4ft HINGES_ONLY, single, 2 hinges.
+    Customer supplies the shutter — no pane / infill / beading. Only the hinges
+    are ours: 2 × 120 = ₹240.
+    """
+    root = _leaf_region(
+        width=3.0, height=4.0,
+        region_type="shutter",
+        pane_spec={"shutterMaterial": "HINGES_ONLY", "infillType": "none", "hasBeading": False},
+        hardware=[_hinge(quantity=2)],
+    )
+    tree = _design_tree(3.0, 4.0, root, "5", "18G")
+    result = price_design(tree, RATES)
+
+    region = result["regions"][0]
+    assert region["pane_structure"] is None
+    assert region["pane_structure_2"] is None
+    assert region["infill"] is None
+    assert region["beading"] is None
+    assert sum(hw["cost"] for hw in region["hardware"]) == 240.0
+    assert region["subtotal"] == 240.0
+
+
+def test_hinges_only_double():
+    """
+    §5.8: a HINGES_ONLY double is customer-supplied on both faces — hinges on both
+    sides (front + back), still no pane / infill / beading. 2+2 hinges = ₹480.
+    """
+    root = _leaf_region(
+        width=3.0, height=4.0,
+        region_type="shutter",
+        pane_spec={
+            "shutterConfig": "double",
+            "shutterMaterial": "HINGES_ONLY", "infillType": "none", "hasBeading": False,
+        },
+        hardware=[_hinge(side="front"), _hinge(side="back")],
+    )
+    tree = _design_tree(3.0, 4.0, root, "5", "18G")
+    result = price_design(tree, RATES)
+
+    region = result["regions"][0]
+    assert region["pane_structure"] is None
+    assert region["pane_structure_2"] is None   # no jali-side pane despite double
+    assert region["infill"] is None             # no implied jali mesh
+    assert region["beading"] is None
+    assert region["subtotal"] == 480.0
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -127,6 +127,16 @@ one side and a jali shutter on the other (`paneSpec.shutterConfig: "double"`; de
   `side: "back"` = jali shutter (the same `side` field double-rebate doors use), and
   each side needs at least one hinge (V-5). Only shutters can be double (V-19).
 
+### Customer-supplied shutter (spec §5.8)
+
+A `shutter` region can set `shutterMaterial: "HINGES_ONLY"` (UI label "No Shutter, only
+Hinges") when the **customer** fabricates the shutter and we supply only the hinges. It's a
+whole-region fabrication-scope flag, not a real material — no pane, infill, or beading is
+charged (P-17); hinges are the only cost. `single` hinges one face; `double` hinges both
+faces (front + back) with no `jaliMaterial`. It is exempt from V-19's jali/glass
+requirement and constrained instead by V-21 (`infillType: "none"`, no beading, no
+`jaliMaterial`).
+
 ---
 
 ## 5. Grills: two completely different models
@@ -213,9 +223,10 @@ rules** (V-1…V-18). A few of the most load-bearing:
 - **INV-7** — every leaf has a `regionType` (default `open`).
 - **V-2/V-3** — no region under 0.5 ft; a split must leave ≥0.5 ft each side.
 - **V-5** — `shutter`/`door` must have ≥1 hinge.
-- **V-12** — `shutter` must have a shutter material.
+- **V-12** — `shutter` must have a shutter material (`MS_PIPE`, `GP_SHEET`, or `HINGES_ONLY`).
 - **V-14** — a lock is valid only on `door`.
 - **V-18** — `door` carries hardware only (no pane, no grill).
+- **V-21** — a `HINGES_ONLY` (customer-supplied) shutter has no infill, beading, or jali material (§5.8).
 
 These are enforced authoritatively by
 [`services/validation.py`](../backend/app/services/validation.py) and mirrored for live
