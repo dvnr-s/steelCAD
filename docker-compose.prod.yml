@@ -32,11 +32,21 @@ services:
     build: ./backend
     restart: unless-stopped
     environment:
+      # APP_ENV=production activates the startup secret validation, HSTS/CSP
+      # headers, and disables the interactive API docs + dev create_all.
+      APP_ENV: production
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-steelcad}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-steelcad}
+      # The DB is only reachable on the internal compose network (no published
+      # port). Set DATABASE_SSL=true if you point DATABASE_URL at an external
+      # or managed Postgres instead.
+      DATABASE_SSL: ${DATABASE_SSL:-false}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required in production}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      # Same-origin behind nginx needs no CORS at all; set this only if the
+      # SPA is served from a different domain than the API.
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       db:

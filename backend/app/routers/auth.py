@@ -25,7 +25,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/login", response_model=TokenResponse, summary="Login with email and password")
-@limiter.limit("10/minute")
+@limiter.limit("5/minute")
 async def login(request: Request, data: UserLogin, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(User).where(User.email == data.email, User.deleted_at.is_(None))
@@ -140,7 +140,8 @@ async def delete_me(
     "/bootstrap-admin",
     summary="Promote a user to admin — only works if NO admin exists yet (first-run only)",
 )
-async def bootstrap_admin(data: dict, db: AsyncSession = Depends(get_db)):
+@limiter.limit("3/hour")
+async def bootstrap_admin(request: Request, data: dict, db: AsyncSession = Depends(get_db)):
     """
     One-time bootstrap: promotes the specified email to admin role.
     Only succeeds if there are currently zero admins in the system.

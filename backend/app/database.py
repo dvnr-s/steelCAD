@@ -15,6 +15,10 @@ engine = create_async_engine(
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
+    # DATABASE_SSL=true makes asyncpg require TLS with certificate verification.
+    # Leave false only when the DB is reached over a trusted private network
+    # (e.g. the internal docker-compose network).
+    connect_args={"ssl": True} if settings.DATABASE_SSL else {},
 )
 
 async_session_factory = async_sessionmaker(

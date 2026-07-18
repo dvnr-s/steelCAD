@@ -55,6 +55,11 @@ app = FastAPI(
     ),
     version="1.0.0",
     lifespan=lifespan,
+    # Interactive API docs are a dev convenience only — don't serve the
+    # OpenAPI schema or docs UIs from a production deployment.
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
 )
 
 # ─── Rate limiter error handler ────────────────────────────────────
@@ -72,15 +77,19 @@ app.add_middleware(
 
 
 # ─── Security headers ──────────────────────────────────────────────
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    response = await call_next(request)
+def apply_security_headers(response) -> None:
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     if settings.is_production:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    apply_security_headers(response)
     return response
 
 
@@ -111,11 +120,25 @@ async def log_requests(request: Request, call_next):
 # ─── Global error handler ──────────────────────────────────────────
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An internal server error occurred. Please try again."},
+    # This handler runs on Starlette's outermost middleware, so the header/
+    # logging middlewares never see its response — set the correlation ID and
+    # security headers here. The exception itself (stack trace, driver errors)
+    # goes to the server log only; the client gets a generic message plus the
+    # request ID to quote when reporting the problem.
+    request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())[:8]
+    logger.exception(
+        "[%s] Unhandled exception on %s %s", request_id, request.method, request.url.path
     )
+    response = JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "An internal server error occurred. Please try again.",
+            "request_id": request_id,
+        },
+    )
+    response.headers["X-Request-ID"] = request_id
+    apply_security_headers(response)
+    return response
 
 
 # ─── Routers ───────────────────────────────────────────────────────

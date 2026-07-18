@@ -11,7 +11,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-steelcad}
       POSTGRES_DB: ${POSTGRES_DB:-steelcad}
     ports:
-      - "5432:5432"
+      # Bound to loopback so the dev database (default credentials) is never
+      # reachable from other machines on the network.
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
