@@ -15,7 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.user import User, ROLE_ADMIN, ROLE_OWNER, ROLE_SALES
 from app.schemas.user import UserInvite, UserResponse, UserRoleUpdate, AdminPasswordReset
-from app.services.auth import hash_password, require_role
+from app.services.audit import record_audit
+from app.services.auth import hash_password, require_role, anonymize_user
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -25,7 +26,9 @@ async def list_users(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
-    result = await db.execute(select(User).order_by(User.created_at))
+    result = await db.execute(
+        select(User).where(User.deleted_at.is_(None)).order_by(User.created_at)
+    )
     return [UserResponse.from_orm_user(u) for u in result.scalars().all()]
 
 
@@ -85,7 +88,9 @@ async def update_user_role(
             detail="Owners can only assign the 'sales' role",
         )
 
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.deleted_at.is_(None))
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -114,7 +119,9 @@ async def reset_user_password(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
 ):
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.deleted_at.is_(None))
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -132,14 +139,16 @@ async def reset_user_password(
 @router.delete(
     "/{user_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a user (admin only)",
+    summary="Delete a user (admin only) — anonymizes all personal data",
 )
 async def delete_user(
     user_id: UUID,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(ROLE_ADMIN)),
 ):
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.deleted_at.is_(None))
+    )
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -150,5 +159,10 @@ async def delete_user(
             detail="Cannot delete your own account",
         )
 
-    await db.delete(user)
+    # Anonymize rather than DELETE: the user's designs/customers/estimates keep
+    # a NOT NULL created_by FK to this row, so a hard delete would either fail
+    # or destroy business records. This scrubs PII and blocks login instead.
+    anonymize_user(user)
     await db.flush()
+    await record_audit(db, current_user, "user.delete", "user", user.id,
+                       "account deleted and personal data anonymized")

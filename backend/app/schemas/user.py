@@ -50,6 +50,11 @@ class ChangePasswordRequest(BaseModel):
         return v
 
 
+class DeleteAccountRequest(BaseModel):
+    """Self-service account deletion — requires the current password."""
+    password: str
+
+
 class AdminPasswordReset(BaseModel):
     """Admin-set replacement password for another user."""
     new_password: str

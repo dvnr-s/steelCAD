@@ -3,7 +3,7 @@
  */
 import { useState } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { LogOut, Settings, Users, LayoutGrid, UserCog, Building2, KeyRound, X, Activity, Trash2, LayoutDashboard } from 'lucide-react'
+import { LogOut, Settings, Users, LayoutGrid, UserCog, Building2, KeyRound, X, Activity, Trash2, LayoutDashboard, UserX } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { authApi } from '../api/client'
@@ -59,12 +59,60 @@ function ChangePasswordModal({ onClose }) {
   )
 }
 
+function DeleteAccountModal({ onClose, onDeleted }) {
+  const [password, setPassword] = useState('')
+  const [deleting, setDeleting] = useState(false)
+
+  const submit = async (e) => {
+    e.preventDefault()
+    setDeleting(true)
+    try {
+      await authApi.deleteAccount(password)
+      onDeleted()
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Failed to delete account')
+      setDeleting(false)
+    }
+  }
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(4px)' }}
+      onClick={(e) => e.target === e.currentTarget && onClose()}>
+      <form className="card fade-in modal-card" style={{ '--modal-w': '400px', padding: 24 }} onSubmit={submit}>
+        <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+          <h3 style={{ margin: 0, color: 'var(--c-error)' }}>Delete account</h3>
+          <button type="button" className="btn btn-ghost btn-sm btn-icon" onClick={onClose}><X size={16} /></button>
+        </div>
+        <p className="text-sm" style={{ color: 'var(--c-text-muted)', marginBottom: 16 }}>
+          This permanently removes your name and email and disables your login.
+          Designs and estimates you created remain, attributed to an anonymized
+          account. This cannot be undone.
+        </p>
+        <div className="form-group" style={{ marginBottom: 16 }}>
+          <label>Confirm your password</label>
+          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus />
+        </div>
+        <button type="submit" className="btn btn-danger w-full" disabled={deleting}>
+          {deleting ? <span className="spinner" style={{ width: 14, height: 14 }} /> : <UserX size={15} />} Delete my account
+        </button>
+      </form>
+    </div>
+  )
+}
+
 export default function TopNav() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const navigate = useNavigate()
   const { pathname } = useLocation()
   const [showPwd, setShowPwd] = useState(false)
+  const [showDelete, setShowDelete] = useState(false)
+
+  const handleDeleted = () => {
+    logout()
+    navigate('/login')
+    toast.success('Your account has been deleted')
+  }
 
   const isHome = pathname === '/'
   const isCustomers = pathname.startsWith('/customers') || pathname.startsWith('/estimates')
@@ -147,11 +195,15 @@ export default function TopNav() {
         <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setShowPwd(true)} title="Change password" aria-label="Change password">
           <KeyRound size={16} />
         </button>
+        <button className="btn btn-ghost btn-sm btn-icon" onClick={() => setShowDelete(true)} title="Delete account" aria-label="Delete account">
+          <UserX size={16} />
+        </button>
         <button className="btn btn-ghost btn-sm btn-icon" onClick={handleLogout} title="Logout" aria-label="Logout">
           <LogOut size={16} />
         </button>
       </div>
       {showPwd && <ChangePasswordModal onClose={() => setShowPwd(false)} />}
+      {showDelete && <DeleteAccountModal onClose={() => setShowDelete(false)} onDeleted={handleDeleted} />}
     </nav>
   )
 }

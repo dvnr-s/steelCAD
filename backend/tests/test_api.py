@@ -102,6 +102,67 @@ class TestAuth:
         assert relogin.status_code == 200
 
 
+# ── Account deletion (anonymization) ──────────────────────────────
+
+class TestAccountDeletion:
+    async def test_self_delete_requires_correct_password(self, client, db_session):
+        await create_user(db_session, "deleteme@test.com")
+        h = auth_headers(await login(client, "deleteme@test.com"))
+        resp = await client.request("DELETE", "/auth/me", headers=h,
+                                    json={"password": "wrongpassword"})
+        assert resp.status_code == 400
+
+    async def test_self_delete_anonymizes_and_invalidates_tokens(self, client, db_session):
+        user = await create_user(db_session, "gone@test.com", name="Going Away")
+        h = auth_headers(await login(client, "gone@test.com"))
+        resp = await client.request("DELETE", "/auth/me", headers=h,
+                                    json={"password": "password123"})
+        assert resp.status_code == 204
+        # Outstanding access token no longer works.
+        assert (await client.get("/auth/me", headers=h)).status_code == 401
+        # Old credentials no longer log in.
+        relogin = await client.post("/auth/login", json={
+            "email": "gone@test.com", "password": "password123"})
+        assert relogin.status_code == 401
+        # PII is scrubbed in place, row survives.
+        await db_session.refresh(user)
+        assert user.email == f"deleted-{user.id}@anonymized.invalid"
+        assert user.name == "Deleted user"
+        assert user.deleted_at is not None
+
+    async def test_last_admin_cannot_self_delete(self, client, db_session):
+        await create_user(db_session, "lastadmin@test.com", role="admin")
+        h = auth_headers(await login(client, "lastadmin@test.com"))
+        resp = await client.request("DELETE", "/auth/me", headers=h,
+                                    json={"password": "password123"})
+        assert resp.status_code == 409
+        # With a second admin present, deletion is allowed.
+        await create_user(db_session, "otheradmin@test.com", role="admin")
+        resp = await client.request("DELETE", "/auth/me", headers=h,
+                                    json={"password": "password123"})
+        assert resp.status_code == 204
+
+    async def test_admin_delete_anonymizes_user_with_records(self, client, db_session):
+        """Deleting a user who created records must not fail on the NOT NULL
+        created_by FK, and must not destroy their business records."""
+        await create_user(db_session, "boss@test.com", role="admin")
+        sales = await create_user(db_session, "worker@test.com", name="Worker")
+        sales_h = auth_headers(await login(client, "worker@test.com"))
+        cust = await client.post("/customers", headers=sales_h,
+                                 json={"name": "Acme Traders", "phone": "9999999999"})
+        assert cust.status_code == 201
+
+        admin_h = auth_headers(await login(client, "boss@test.com"))
+        resp = await client.delete(f"/users/{sales.id}", headers=admin_h)
+        assert resp.status_code == 204
+        # Deleted user disappears from the list…
+        listed = (await client.get("/users", headers=admin_h)).json()
+        assert str(sales.id) not in [u["id"] for u in listed]
+        # …but the customer they created survives.
+        still_there = await client.get(f"/customers/{cust.json()['id']}", headers=admin_h)
+        assert still_there.status_code == 200
+
+
 # ── RBAC: Rates ────────────────────────────────────────────────────
 
 class TestRatesRBAC:

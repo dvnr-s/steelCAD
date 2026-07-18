@@ -35,7 +35,17 @@ const useAuthStore = create(
         }
       },
     }),
-    { name: 'steelcad-auth', partialize: (s) => ({ user: s.user, isAuthenticated: s.isAuthenticated }) }
+    {
+      name: 'steelcad-auth',
+      // Persist only what routing needs across a hard refresh (auth flag +
+      // role for RoleRoute). Email/name are PII and must not sit in
+      // localStorage, where any injected script could read them — fetchMe()
+      // rehydrates the full profile from /auth/me on boot.
+      partialize: (s) => ({
+        isAuthenticated: s.isAuthenticated,
+        user: s.user ? { role: s.user.role } : null,
+      }),
+    }
   )
 )
 
