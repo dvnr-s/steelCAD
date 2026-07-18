@@ -1,6 +1,7 @@
 """
 Authentication service — JWT creation/validation, password hashing, FastAPI dependencies.
 """
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
@@ -27,6 +28,32 @@ def hash_password(password: str) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+
+# Hash of a random throwaway secret. Login verifies against this when the email
+# doesn't match any account, so a failed login takes the same time either way —
+# otherwise response timing would reveal which emails have accounts.
+_ENUMERATION_GUARD_HASH = hash_password(secrets.token_urlsafe(16))
+
+
+def burn_password_check() -> None:
+    """Spend one bcrypt verification on a dummy hash (timing equalizer)."""
+    verify_password("invalid", _ENUMERATION_GUARD_HASH)
+
+
+def anonymize_user(user: User) -> None:
+    """Scrub a user's personal data in place and disable the account.
+
+    The row must survive (designs/customers/estimates hold NOT NULL created_by
+    FKs), so deletion = anonymization: email and name are replaced, the password
+    is reset to an unusable random hash, and deleted_at both hides the account
+    and invalidates any outstanding JWTs via get_current_user.
+    """
+    user.email = f"deleted-{user.id}@anonymized.invalid"
+    user.name = "Deleted user"
+    user.password = hash_password(secrets.token_urlsafe(32))
+    user.is_admin = False
+    user.deleted_at = datetime.now(timezone.utc)
 
 
 # ─── JWT utilities ─────────────────────────────────────────────────
@@ -77,7 +104,7 @@ async def get_current_user(
         )
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user:
+    if not user or user.deleted_at is not None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",

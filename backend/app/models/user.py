@@ -41,3 +41,9 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    # Account deletion: the row is kept (created_by FKs on designs/customers/
+    # estimates are NOT NULL) but PII is scrubbed via anonymize_user() and
+    # deleted_at is set, which blocks login and invalidates outstanding tokens.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )

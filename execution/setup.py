@@ -12,6 +12,7 @@ Usage:
 
 Requirements: requests (pip install requests), Docker running the compose stack
 """
+import getpass
 import subprocess
 import sys
 import time
@@ -150,7 +151,8 @@ def main():
     print("   This account will have access to rate management.")
     email = input("   Email: ").strip()
     name  = input("   Name:  ").strip()
-    password = input("   Password (min 8 chars): ").strip()
+    # getpass: the password must not be echoed to the terminal or scrollback.
+    password = getpass.getpass("   Password (min 8 chars): ").strip()
 
     if len(password) < 8:
         print("❌ Password must be at least 8 characters")

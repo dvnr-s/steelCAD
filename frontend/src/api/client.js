@@ -62,6 +62,8 @@ export const authApi = {
   login: (data) => api.post('/auth/login', data),
   me: () => api.get('/auth/me'),
   changePassword: (data) => api.post('/auth/change-password', data),
+  // Anonymizes the account server-side; requires the current password.
+  deleteAccount: (password) => api.delete('/auth/me', { data: { password } }),
 }
 
 // ─── Users (invite-only management) ──────────────────────────────

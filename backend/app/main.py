@@ -147,7 +147,9 @@ async def readiness(request: Request):
         return {"status": "ready"}
     except Exception as exc:
         logger.error("Readiness check failed: %s", exc)
+        # Detail stays in the server log only — the raw exception can embed the
+        # DB DSN (host, user, password), which must never reach a client.
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={"status": "not_ready", "detail": str(exc)},
+            content={"status": "not_ready", "detail": "Database unreachable"},
         )
