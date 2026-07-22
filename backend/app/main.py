@@ -83,7 +83,13 @@ def apply_security_headers(response) -> None:
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     if settings.is_production:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+        # Kept in sync with the SPA policy in frontend/nginx.conf so API
+        # responses carry the same protections when accessed directly.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; "
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        )
 
 
 @app.middleware("http")

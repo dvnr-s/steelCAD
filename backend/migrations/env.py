@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 
-from app.database import Base
+from app.database import Base, build_connect_args
 from app.models import *  # This registers all models with Base.metadata
 from app.config import get_settings
 
@@ -53,6 +53,8 @@ async def run_async_migrations() -> None:
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        # Honor DATABASE_SSL so migrations reach TLS-only databases too.
+        connect_args=build_connect_args(),
     )
 
     async with connectable.connect() as connection:
