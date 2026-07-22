@@ -627,7 +627,8 @@ def price_design(
     # 5. Discount (PR-5)
     discount_amount = 0.0
     if discount_type == "PERCENTAGE" and discount_value > 0:
-        discount_amount = _round2(subtotal * discount_value / 100)
+        # Clamp at 100% so a stored/legacy value can never yield a negative total.
+        discount_amount = _round2(subtotal * min(discount_value, 100) / 100)
     elif discount_type == "FLAT" and discount_value > 0:
         discount_amount = _round2(min(discount_value, subtotal))
 
@@ -679,7 +680,8 @@ def _apply_commercial_terms(
 
     discount_amount = 0.0
     if discount_type == "PERCENTAGE" and discount_value > 0:
-        discount_amount = _round2(gross * discount_value / 100)
+        # Clamp at 100% so a stored/legacy value can never yield a negative total.
+        discount_amount = _round2(gross * min(discount_value, 100) / 100)
     elif discount_type == "FLAT" and discount_value > 0:
         discount_amount = _round2(min(discount_value, gross))
 

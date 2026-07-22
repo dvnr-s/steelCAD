@@ -5,13 +5,46 @@ PDF using WeasyPrint.
 from datetime import datetime, timezone
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.services.diagram import tree_to_svg
 from app.services.bom import build_bom
 from app.services.units import fmt_ft_in
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
+
+
+def _build_env() -> Environment:
+    """Jinja env with HTML autoescaping ON.
+
+    User-controlled fields (customer name/address/notes, estimate terms, company
+    branding) flow straight into this template and are rendered by WeasyPrint. A
+    bare Environment does NOT autoescape, which would let any authenticated user
+    inject HTML into the PDF — and via WeasyPrint's URL fetcher, reach file:// or
+    remote URLs (local-file read / SSRF). Autoescape neutralizes the markup; the
+    fetcher below is the second layer.
+    """
+    env = Environment(
+        loader=FileSystemLoader(str(TEMPLATE_DIR)),
+        autoescape=select_autoescape(["html", "xml"]),
+    )
+    env.filters["money"] = _fmt
+    return env
+
+
+def _data_only_url_fetcher(url: str):
+    """WeasyPrint URL fetcher that permits ONLY inline data: URIs.
+
+    Templates legitimately embed the company logo as a data: URL and nothing
+    else. Blocking every other scheme stops a hostile field (e.g. an injected
+    `<img src="file:///etc/passwd">` or `src="http://internal/…">`) from turning
+    a PDF render into local-file disclosure or a blind SSRF from the API host.
+    """
+    if not url.lower().startswith("data:"):
+        raise ValueError(f"Blocked non-data URL during PDF render: {url[:48]!r}")
+    from weasyprint import default_url_fetcher
+
+    return default_url_fetcher(url)
 
 
 def _fmt(value: float) -> str:
@@ -28,9 +61,7 @@ def _fmt_date(value) -> str:
 
 def render_estimate_html(estimate, company=None) -> str:
     """Render the quotation HTML (factored out so tests can assert on it)."""
-    env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)))
-    env.filters["money"] = _fmt
-    template = env.get_template("estimate_pdf.html")
+    template = _build_env().get_template("estimate_pdf.html")
 
     customer = estimate.customer
     frames = []
@@ -107,7 +138,7 @@ def generate_estimate_pdf(estimate, company=None) -> bytes:
     """
     from weasyprint import HTML
     html_content = render_estimate_html(estimate, company)
-    return HTML(string=html_content).write_pdf()
+    return HTML(string=html_content, url_fetcher=_data_only_url_fetcher).write_pdf()
 
 
 # ─── Customer-facing quotation (summary PDF) ────────────────────────
@@ -203,9 +234,7 @@ def _spec_summary(breakdown: dict, tree: dict) -> str:
 
 def render_customer_estimate_html(estimate, company=None) -> str:
     """Render the customer-facing quotation HTML (factored out for tests)."""
-    env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)))
-    env.filters["money"] = _fmt
-    template = env.get_template("estimate_customer_pdf.html")
+    template = _build_env().get_template("estimate_customer_pdf.html")
 
     customer = estimate.customer
     frames = []
@@ -275,4 +304,7 @@ def render_customer_estimate_html(estimate, company=None) -> str:
 def generate_customer_estimate_pdf(estimate, company=None) -> bytes:
     """Render the customer-facing summary quotation to PDF bytes."""
     from weasyprint import HTML
-    return HTML(string=render_customer_estimate_html(estimate, company)).write_pdf()
+    return HTML(
+        string=render_customer_estimate_html(estimate, company),
+        url_fetcher=_data_only_url_fetcher,
+    ).write_pdf()

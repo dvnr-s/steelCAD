@@ -100,42 +100,42 @@ curl http://localhost/api/ready
 
 Access is invite-only — no public sign-up. You need at least one admin to create other users.
 
-**Step 1 — Create the first account directly in the DB** (there is no public sign-up;
-the login screen only signs in existing users). In dev, `python execution/setup.py`
-automates this whole section. In production:
+**Create the first admin directly in the DB** (there is no public sign-up; the login
+screen only signs in existing users). This is the trusted, recommended path — it needs
+container access, which only an operator has. In dev, `python execution/setup.py`
+automates this whole section (it creates the account and, when no admin exists yet,
+promotes it to admin in the same DB step). In production:
 
 ```bash
 docker compose -f docker-compose.prod.yml exec backend python - <<'EOF'
 import asyncio
 from app.database import async_session_factory
 from app.models.user import User
-from app.services.auth import hash_password
 
 async def main():
+    from app.services.auth import hash_password
     async with async_session_factory() as db:
-        user = User(
+        db.add(User(
             email="admin@example.com",
             name="Admin",
             password=hash_password("ChangeMe123!"),
-            role="sales",
-        )
-        db.add(user)
+            role="admin",      # first admin bootstraps the system
+            is_admin=True,
+        ))
         await db.commit()
 
 asyncio.run(main())
 EOF
 ```
 
-**Step 2 — Promote to admin** (one-time; endpoint becomes a no-op once any admin exists):
+After this, log in as the admin and use the **Users** page (`/users`) to invite additional owners and sales users.
 
-```bash
-curl -X POST http://localhost/api/auth/bootstrap-admin \
-  -H "Content-Type: application/json" \
-  -d '{"email": "admin@example.com"}'
-# {"message": "admin@example.com is now an admin"}
-```
-
-After this, log in as the admin and use the **Users** page (`/users`) to invite additional owners and sales users. The bootstrap endpoint is disabled once an admin exists.
+> **`POST /auth/bootstrap-admin` is disabled by default.** It only responds when the
+> `BOOTSTRAP_ADMIN_SECRET` env var is set, and the request must present that exact
+> secret (`{"email": "...", "secret": "..."}`). This is a break-glass path — an
+> unauthenticated caller must never be able to seize admin during a window where no
+> admin exists. Prefer the direct-DB step above; if you do enable the endpoint for a
+> one-off promotion, unset `BOOTSTRAP_ADMIN_SECRET` again afterward.
 
 ---
 

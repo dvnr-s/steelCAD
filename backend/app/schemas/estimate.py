@@ -8,7 +8,7 @@ from datetime import datetime, date
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 EstimateStatus = Literal["draft", "sent", "accepted", "rejected"]
 
@@ -97,6 +97,16 @@ class OtherCharge(BaseModel):
     amount: float = Field(ge=0)
 
 
+def _validate_percentage_discount(discount_type, discount_value):
+    """A PERCENTAGE discount above 100% would drive the total negative."""
+    if (
+        discount_type == "PERCENTAGE"
+        and discount_value is not None
+        and discount_value > 100
+    ):
+        raise ValueError("A PERCENTAGE discount cannot exceed 100%")
+
+
 class EstimateCreate(BaseModel):
     title: Optional[str] = None
     notes: Optional[str] = None
@@ -107,6 +117,11 @@ class EstimateCreate(BaseModel):
     # None → the company's default_advance_pct applies.
     advance_pct: Optional[float] = Field(default=None, ge=0, le=100)
     other_charges: list[OtherCharge] = Field(default_factory=list, max_length=20)
+
+    @model_validator(mode="after")
+    def _cap_discount(self):
+        _validate_percentage_discount(self.discount_type, self.discount_value)
+        return self
 
 
 class EstimateUpdate(BaseModel):
@@ -119,6 +134,11 @@ class EstimateUpdate(BaseModel):
     discount_value: Optional[float] = Field(default=None, ge=0)
     advance_pct: Optional[float] = Field(default=None, ge=0, le=100)
     other_charges: Optional[list[OtherCharge]] = Field(default=None, max_length=20)
+
+    @model_validator(mode="after")
+    def _cap_discount(self):
+        _validate_percentage_discount(self.discount_type, self.discount_value)
+        return self
 
 
 class EstimateStatusUpdate(BaseModel):

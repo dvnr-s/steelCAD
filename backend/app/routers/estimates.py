@@ -64,7 +64,12 @@ async def _recompute(estimate: Estimate, db: AsyncSession) -> None:
     for fr in estimate.frames:
         try:
             unit = price_design(fr.tree_json, values, discount_type=None, discount_value=0, advance_pct=0)
-        except ValueError as e:
+        except (ValueError, KeyError) as e:
+            # ValueError → unknown rate; KeyError → a required tree field is absent
+            # (e.g. a legacy frame missing sectionSize/gauge). Either way this is a
+            # bad frame, not a server fault — surface 422, not an uncaught 500. New
+            # frames are guarded earlier by validate_design_tree (V-23); this covers
+            # already-stored frames re-priced on any estimate edit.
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Pricing error in frame '{fr.name}': {e}",

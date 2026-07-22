@@ -13,6 +13,11 @@ MAX_FRAME_HEIGHT_FT = 20
 MAX_TREE_DEPTH = 8
 MAX_TREE_NODES = 200
 
+# V-22 geometry-consistency tolerance (ft). Comfortably above the frontend's
+# 1e-4 coordinate-cleaning precision (editorStore `_clean`), so honest
+# grid-snapped geometry never trips it while a hand-edited/mis-derived tree does.
+GEOM_EPS = 1e-3
+
 
 def validate_tree_bounds(tree: dict) -> list[str]:
     """
@@ -72,6 +77,14 @@ def validate_design_tree(tree: dict) -> list[str]:
     if errors:
         return errors
 
+    # V-23: section/gauge must be present — pricing derives the section rate from
+    # them (a design tree is schema-checked, but one-off frame trees arrive as a
+    # raw dict, so a missing field would otherwise KeyError inside pricing).
+    if not tree.get("sectionSize"):
+        errors.append("V-23: Design tree must have a sectionSize")
+    if not tree.get("gauge"):
+        errors.append("V-23: Design tree must have a gauge")
+
     # V-1: Frame dimensions >= 1 ft
     frame = tree.get("frame")
     if not frame:
@@ -89,6 +102,14 @@ def validate_design_tree(tree: dict) -> list[str]:
         errors.append("INV-2: Frame must have a root region")
         return errors
 
+    # V-22: the root region must span the whole frame (the tree is re-derived from
+    # frame size + split ratios; the backend does not trust stored dimensions).
+    if not _dims_match(root, frame.get("width", 0), frame.get("height", 0)):
+        errors.append(
+            f"V-22: Root region {_dims_label(root)} must match the frame "
+            f"({frame.get('width', 0)}ft × {frame.get('height', 0)}ft)"
+        )
+
     # INV-10: all splits use same section/gauge as design root
     # (enforced structurally — no per-split override fields in schema)
 
@@ -96,6 +117,18 @@ def validate_design_tree(tree: dict) -> list[str]:
     _validate_region(root, errors)
 
     return errors
+
+
+def _dims_match(region: dict, exp_w: float, exp_h: float) -> bool:
+    """True if the region's stored width/height equal the expected dims (V-22)."""
+    return (
+        abs(region.get("width", 0) - exp_w) <= GEOM_EPS
+        and abs(region.get("height", 0) - exp_h) <= GEOM_EPS
+    )
+
+
+def _dims_label(region: dict) -> str:
+    return f"({region.get('width', 0)}ft × {region.get('height', 0)}ft)"
 
 
 def _validate_region(region: dict, errors: list[str]) -> None:
@@ -159,6 +192,23 @@ def _validate_region(region: dict, errors: list[str]) -> None:
                 f"V-3: Split {split.get('id', '?')} leaves only "
                 f"{side_b:.2f}ft on side B (minimum 0.5ft)"
             )
+
+        # V-22: each child's stored dimensions must equal the parent's scaled by
+        # the split ratio (mirrors editorStore `_layoutRegion`: children are
+        # [near, far] along the split direction, full extent across it). The
+        # backend re-derives geometry as a guard — it never bills stored dims that
+        # don't correspond to the split that produced them (§12.2).
+        if direction == "vertical":
+            expected = ((w * pos, h), (w * (1 - pos), h))
+        else:
+            expected = ((w, h * pos), (w, h * (1 - pos)))
+        for child, (exp_w, exp_h) in zip(children, expected):
+            if not _dims_match(child, exp_w, exp_h):
+                errors.append(
+                    f"V-22: Region {_dims_label(child)} does not match its "
+                    f"{direction} split at position {pos} "
+                    f"(expected {exp_w:.4f}ft × {exp_h:.4f}ft)"
+                )
 
         for child in children:
             _validate_region(child, errors)

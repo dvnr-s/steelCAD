@@ -1042,6 +1042,18 @@ The system MUST reject invalid states rather than guessing:
   `hasBeading: false`, `jaliBeading: false`, and no `jaliMaterial` — the customer fabricates
   the shutter(s), so we record no pane, infill, or beading. It still must satisfy V-5
   (a `HINGES_ONLY` double needs a hinge on each side, HW-9).
+- **V-22**: **Stored geometry must be consistent with the tree that derives it** — the backend
+  does not trust frontend-supplied `width`/`height` (§12.2). The root region's `width`/`height`
+  must equal the frame's, and each child of a split must have dimensions equal to the parent's
+  scaled by the split `position`: a `vertical` split yields child widths `w×position` and
+  `w×(1−position)` at the parent's full height; a `horizontal` split yields child heights
+  `h×position` and `h×(1−position)` at the parent's full width. Checked within a `0.001` ft
+  tolerance (above the frontend's `1e-4` coordinate-cleaning precision). Any inconsistency is
+  rejected — this enforces the §12.2 re-derivation contract as a guard against a buggy client
+  or a hand-edited tree mispricing.
+- **V-23**: `sectionSize` and `gauge` must be present on the design/frame tree — the section
+  rate (§9.1) is derived from them. A tree missing either is rejected in validation rather than
+  raising during pricing.
 
 ---
 
@@ -1057,7 +1069,9 @@ The system MUST reject invalid states rather than guessing:
 ### 12.2 Estimate Flow
 1. Frontend requests estimate: POST `/api/designs/{id}/estimate/`.
 2. Backend loads the tree from DB.
-3. Backend re-derives ALL dimensions from the tree (does not trust frontend math).
+3. Backend re-derives ALL dimensions from the tree (does not trust frontend math). Enforced
+   as a validation guard (V-22): the backend rejects any tree whose stored `width`/`height`
+   are inconsistent with its frame size and split positions, rather than recomputing them.
 4. Backend runs pricing engine with current rate snapshot.
 5. Creates EstimateVersion with rate snapshot + full breakdown.
 6. Returns detailed breakdown JSON.

@@ -273,3 +273,78 @@ def test_bar_adjust_checked_on_branch_continuity_grill():
     branch["overlays"] = [_ss_grill(-4)]
     errors = validate_design_tree(_tree(branch))
     assert any("V-20" in e for e in errors)
+
+
+# ─── V-22: stored geometry must match the tree that derives it (§12.2) ──
+
+def _vsplit_tree(pos=0.5, fw=4.0, fh=3.0):
+    """A frame with one vertical split whose children are laid out honestly:
+    widths fw×pos / fw×(1−pos) at full height — matching editorStore relayout."""
+    left = _leaf(width=fw * pos, height=fh)
+    right = _leaf(width=fw * (1 - pos), height=fh)
+    branch = _branch([left, right], width=fw, height=fh)
+    branch["split"]["position"] = pos
+    return _tree(branch, width=fw, height=fh)
+
+
+def _hsplit_tree(pos=0.5, fw=4.0, fh=3.0):
+    """A frame with one horizontal split: heights fh×pos / fh×(1−pos) at full width."""
+    top = _leaf(width=fw, height=fh * pos)
+    bottom = _leaf(width=fw, height=fh * (1 - pos))
+    branch = _branch([top, bottom], width=fw, height=fh)
+    branch["split"].update({"direction": "horizontal", "position": pos})
+    return _tree(branch, width=fw, height=fh)
+
+
+def test_consistent_vertical_split_passes():
+    assert validate_design_tree(_vsplit_tree(pos=0.6)) == []
+
+
+def test_consistent_horizontal_split_passes():
+    assert validate_design_tree(_hsplit_tree(pos=0.4)) == []
+
+
+def test_child_width_inconsistent_with_split_is_rejected():
+    # The headline case: a 5ft-wide child relabelled as 1ft would misprice.
+    tree = _vsplit_tree(pos=0.5)          # honest children are 2.0ft wide
+    tree["frame"]["rootRegion"]["split"]["children"][0]["width"] = 1.0
+    errors = validate_design_tree(tree)
+    assert any("V-22" in e for e in errors)
+
+
+def test_child_height_inconsistent_with_horizontal_split_is_rejected():
+    tree = _hsplit_tree(pos=0.5)          # honest children are 1.5ft tall
+    tree["frame"]["rootRegion"]["split"]["children"][1]["height"] = 0.9
+    errors = validate_design_tree(tree)
+    assert any("V-22" in e for e in errors)
+
+
+def test_root_region_must_match_frame():
+    tree = _tree(_leaf(width=4.0, height=3.0), width=4.0, height=3.0)
+    tree["frame"]["rootRegion"]["width"] = 2.0   # root no longer spans the frame
+    errors = validate_design_tree(tree)
+    assert any("V-22" in e and "Root region" in e for e in errors)
+
+
+def test_geometry_within_tolerance_passes():
+    # Float drift below the 1e-3 tolerance must not be flagged (honest,
+    # frontend-cleaned geometry lands here).
+    tree = _vsplit_tree(pos=0.5)                  # children 2.0ft wide
+    tree["frame"]["rootRegion"]["split"]["children"][0]["width"] = 2.0004
+    assert validate_design_tree(tree) == []
+
+
+# ─── V-23: sectionSize / gauge must be present (pricing derives from them) ──
+
+def test_missing_section_size_rejected():
+    tree = _tree(_leaf())
+    del tree["sectionSize"]
+    errors = validate_design_tree(tree)
+    assert any("V-23" in e and "sectionSize" in e for e in errors)
+
+
+def test_missing_gauge_rejected():
+    tree = _tree(_leaf())
+    del tree["gauge"]
+    errors = validate_design_tree(tree)
+    assert any("V-23" in e and "gauge" in e for e in errors)

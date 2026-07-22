@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
 
+    # Shared secret that must be presented to POST /auth/bootstrap-admin (the
+    # one-time first-admin promotion). Empty by default, which DISABLES the
+    # endpoint — set it only for the first-run bootstrap, then unset it. This
+    # stops an unauthenticated caller from seizing admin during any window where
+    # no admin exists (fresh deploy, or all admins removed).
+    BOOTSTRAP_ADMIN_SECRET: str = ""
+
     # Require TLS on the database connection (set true when the DB is reached
     # over any network you don't control, e.g. a managed Postgres service).
     DATABASE_SSL: bool = False

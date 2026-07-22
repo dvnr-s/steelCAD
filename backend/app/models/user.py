@@ -41,6 +41,13 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+    # Credential-change watermark. Every token embeds this instant; auth rejects
+    # a token whose watermark predates the current one, so changing or resetting
+    # a password immediately invalidates all previously issued access/refresh
+    # tokens. Defaults to account creation time for pre-existing rows.
+    password_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+    )
     # Account deletion: the row is kept (created_by FKs on designs/customers/
     # estimates are NOT NULL) but PII is scrubbed via anonymize_user() and
     # deleted_at is set, which blocks login and invalidates outstanding tokens.

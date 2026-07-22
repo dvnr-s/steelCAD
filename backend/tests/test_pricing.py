@@ -90,6 +90,18 @@ def test_round_rupee():
     assert _round_rupee(1234.6) == 1235
 
 
+def test_missing_section_field_raises_keyerror():
+    """price_design derives the section rate from sectionSize/gauge and will
+    KeyError if either is absent. The estimate router catches (ValueError,
+    KeyError) so a malformed frame surfaces as 422, not an uncaught 500;
+    validation (V-23) rejects such frames on add/update in the first place."""
+    import pytest
+    tree = _design_tree(4.0, 3.0, _leaf_region(4.0, 3.0, "fixed"))
+    del tree["sectionSize"]
+    with pytest.raises(KeyError):
+        price_design(tree, RATES)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Test: Simple frame-only design (no splits, open region)
 # ═══════════════════════════════════════════════════════════════════

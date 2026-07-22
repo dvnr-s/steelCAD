@@ -18,10 +18,13 @@ first for the complete system model (data flow, request lifecycles, design trade
 [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md), [`docs/PRICING_ENGINE.md`](docs/PRICING_ENGINE.md),
 [`docs/BACKEND.md`](docs/BACKEND.md), [`docs/FRONTEND.md`](docs/FRONTEND.md), and
 [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) go deeper on each area;
-[`docs/DEPLOY.md`](docs/DEPLOY.md) is the production runbook and
+[`docs/DEPLOY.md`](docs/DEPLOY.md) is the production runbook,
 [`docs/AUTHORIZATION_GAPS.md`](docs/AUTHORIZATION_GAPS.md) documents the authorization
-model. This file is a condensed pointer for quick orientation — prefer those docs for
-anything non-trivial.
+model, and the security/privacy posture lives in
+[`docs/SECURITY_HARDENING.md`](docs/SECURITY_HARDENING.md),
+[`docs/PRIVACY.md`](docs/PRIVACY.md), and
+[`docs/SECRET_SAFETY_AUDIT.md`](docs/SECRET_SAFETY_AUDIT.md). This file is a condensed
+pointer for quick orientation — prefer those docs for anything non-trivial.
 
 ## Commands
 
@@ -152,8 +155,10 @@ without parsing JSON.
 (`assert_editable`); "revise" clones as rev N+1 and supersedes the parent, "duplicate"
 copies to a fresh draft. Designs/customers/estimates are **soft-deleted**
 (`deleted_at`) and restorable from the Trash page. Schema evolves via Alembic
-(`backend/migrations/versions/`, currently 0001–0010); dev startup still runs
-`create_all` as a convenience.
+(`backend/migrations/versions/`, currently 0001–0013); dev startup still runs
+`create_all` as a convenience. **That convenience is also a trap — see the DB-parity
+warning under "Dev vs. prod": dev schemas are built by `create_all`, so migrations are
+only ever exercised for real in production.**
 
 ### Dev vs. prod
 
@@ -163,6 +168,25 @@ Dev bind-mounts `backend/` into the container (`./backend:/app` + anonymous
 need `docker compose up -d --build backend`**. Prod uses self-contained images, no
 reload, `--workers 4`, and only exposes nginx on `:80` (Postgres/backend are internal
 only); `JWT_SECRET_KEY`/`POSTGRES_PASSWORD` are required (no insecure defaults).
+
+**⚠️ Dev and prod build the schema differently — this is a real, recurring source of
+production-only failures.** Dev startup runs SQLAlchemy `create_all`, which materializes
+whatever the current ORM models declare and **silently skips the Alembic migrations**.
+Production does *not* run `create_all`; its schema is only ever what the migrations built.
+Consequences to keep in mind on every schema change:
+
+- A column/constraint added to a model but **not** to a migration works in dev and breaks
+  in prod. Adding a migration is mandatory, not optional — the model change alone is a bug.
+- The dev DB has drifted from the migration history before (its physical schema didn't
+  match `alembic_version`). So a migration that `DROP`s or renames an old constraint/column
+  can fail in dev even when it's correct, and vice-versa. **Before writing a
+  drop/rename/alter migration, verify the object actually exists in the target DB**
+  (`docker exec steelcad-db-1 psql -U steelcad -d steelcad -c "\d+ <table>"`) and prefer
+  `IF EXISTS` / `IF NOT EXISTS` guards (see migration 0010's `DROP CONSTRAINT IF EXISTS`).
+- **Test migrations against a copy of the production schema, not just a fresh dev DB** — a
+  fresh dev DB is built by `create_all` and never exercises the migration you just wrote.
+- WeasyPrint has no native libs on the Windows host, so PDF-rendering tests must run in the
+  container (`docker exec … steelcad-backend-1 python -m pytest -q`), not on the host.
 
 ## Conventions
 
@@ -184,3 +208,33 @@ only); `JWT_SECRET_KEY`/`POSTGRES_PASSWORD` are required (no insecure defaults).
   estimates are locked (`assert_editable`). Roles are `admin` / `owner` / `sales`
   (invite-only user creation via `/users`). Route any new mutation through this seam —
   see `docs/AUTHORIZATION_GAPS.md` for the model.
+- **Security is a standing requirement, not a phase.** This app is being hardened for a
+  real deployment ([`docs/SECURITY_HARDENING.md`](docs/SECURITY_HARDENING.md) is the
+  running record; [`docs/PRIVACY.md`](docs/PRIVACY.md) covers PII). Hold the line on the
+  invariants already established — don't regress them:
+  - **The backend re-derives and never trusts the client.** Any new geometry/pricing input
+    is re-validated server-side (`validation.py`, invariants INV-* / rules V-*); the
+    frontend's numbers are a preview only. New user-controlled fields get length caps and
+    type validation in the Pydantic schema.
+  - **Anything user-controlled that reaches a PDF must stay escaped.** Templates render via
+    the autoescaping Jinja env in `services/pdf.py`, and WeasyPrint uses the `data:`-only
+    URL fetcher — do not bypass either (it reopens HTML-injection / SSRF / local-file read).
+  - **Auth tokens carry a credential watermark** (`password_changed_at` → `pwd` claim). Any
+    new credential-changing path must call `mark_password_changed(user)` so old tokens are
+    revoked.
+  - **Rate-limit new sensitive endpoints** via the shared `limiter`, and never key limiting
+    on the socket peer in prod (it's always nginx — see `services/ratelimit.py`).
+  - **No secrets in code, no insecure prod defaults.** Prod refuses to boot on a dev/short
+    JWT secret or default DB creds (`config.validate_production_secrets`); keep it that way.
+  When a change has a security dimension, note it in `docs/SECURITY_HARDENING.md`.
+- **Keep docs in lockstep with the change, and surface decisions instead of guessing.**
+  This is a documentation-first repo: the spec and `docs/` are treated as source of truth,
+  so a change isn't done until the docs that describe it are updated in the same pass —
+  `directives/design_rules_spec.md` for any rule/geometry change, the relevant `docs/*.md`
+  for behavior, `docs/DEPLOY.md` for anything ops/config (new env vars, migration steps),
+  and this file when a convention or high-level structure shifts. Prune or fix stale lines
+  you pass through (e.g. an out-of-date migration count) rather than leaving contradictions.
+  And when a task is ambiguous or a decision is genuinely the user's to make — where to put
+  something, which of two viable approaches, an assumption that changes the outcome —
+  **ask a focused question before acting** rather than picking silently and reworking later.
+  Pick the obvious default only when there is one; flag the assumption when you do.

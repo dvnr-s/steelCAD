@@ -2,10 +2,13 @@
 Auth router — login, refresh tokens, get current user.
 Account creation is invite-only: use POST /users (admin/owner only).
 """
+import secrets
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.services.ratelimit import limiter
 from app.database import get_db
 from app.models.user import User, ROLE_ADMIN
@@ -19,6 +22,7 @@ from app.services.auth import (
     create_access_token, create_refresh_token,
     decode_token, get_current_user,
     anonymize_user, burn_password_check,
+    mark_password_changed, token_watermark_matches,
 )
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -45,8 +49,8 @@ async def login(request: Request, data: UserLogin, db: AsyncSession = Depends(ge
             detail="Invalid credentials",
         )
     return TokenResponse(
-        access_token=create_access_token(str(user.id)),
-        refresh_token=create_refresh_token(str(user.id)),
+        access_token=create_access_token(user),
+        refresh_token=create_refresh_token(user),
     )
 
 
@@ -66,9 +70,16 @@ async def refresh(request: Request, data: RefreshRequest, db: AsyncSession = Dep
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    if not token_watermark_matches(user, payload):
+        # Refresh token predates the last password change/reset — reject it so a
+        # leaked refresh token can't outlive a credential rotation.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired — please sign in again",
+        )
     return TokenResponse(
-        access_token=create_access_token(str(user.id)),
-        refresh_token=create_refresh_token(str(user.id)),
+        access_token=create_access_token(user),
+        refresh_token=create_refresh_token(user),
     )
 
 
@@ -91,6 +102,7 @@ async def change_password(
             detail="Current password is incorrect",
         )
     user.password = hash_password(data.new_password)
+    mark_password_changed(user)  # revoke every previously issued token
     await db.flush()
     return {"message": "Password updated"}
 
@@ -144,9 +156,19 @@ async def delete_me(
 async def bootstrap_admin(request: Request, data: dict, db: AsyncSession = Depends(get_db)):
     """
     One-time bootstrap: promotes the specified email to admin role.
-    Only succeeds if there are currently zero admins in the system.
-    Safe to call multiple times — becomes a no-op once any admin exists.
+    Requires the correct BOOTSTRAP_ADMIN_SECRET and that there are currently
+    zero admins. Without the secret configured the endpoint is disabled, so an
+    unauthenticated caller can't seize admin during a zero-admin window.
     """
+    configured = get_settings().BOOTSTRAP_ADMIN_SECRET
+    provided = (data.get("secret") or "") if isinstance(data, dict) else ""
+    # constant-time compare; also treat an unset server secret as "disabled".
+    if not configured or not secrets.compare_digest(str(provided), configured):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bootstrap is disabled.",
+        )
+
     existing = await db.execute(
         select(User).where(User.role == ROLE_ADMIN, User.deleted_at.is_(None))
     )

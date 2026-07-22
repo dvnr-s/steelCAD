@@ -46,30 +46,46 @@ def wait_for_backend(timeout=60):
     return False
 
 
-# Runs inside the backend container: creates the user row unless it exists.
-# Credentials are passed via environment variables to avoid shell-quoting issues.
+# Runs inside the backend container: creates the first user and, when the
+# system has no admin yet, promotes them to admin directly in the DB. This is
+# the trusted first-run seam (host-side docker access), so it does NOT depend on
+# the /auth/bootstrap-admin HTTP endpoint — that endpoint stays disabled unless
+# BOOTSTRAP_ADMIN_SECRET is explicitly set. Credentials pass via env vars to
+# avoid shell-quoting issues.
 _CREATE_USER_SNIPPET = """
 import asyncio, os
-from sqlalchemy import select
+from sqlalchemy import select, func
 from app.database import async_session_factory
-from app.models.user import User
-from app.services.auth import hash_password
+from app.models.user import User, ROLE_ADMIN
 
 async def main():
+    from app.services.auth import hash_password
     email = os.environ["SETUP_EMAIL"]
     async with async_session_factory() as db:
+        admin_count = (await db.execute(
+            select(func.count(User.id)).where(User.role == ROLE_ADMIN, User.deleted_at.is_(None))
+        )).scalar() or 0
+        first_admin = admin_count == 0  # first-ever admin bootstraps the system
+
         existing = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
         if existing:
-            print("EXISTS")
+            if first_admin and existing.deleted_at is None:
+                existing.role = ROLE_ADMIN
+                existing.is_admin = True
+                await db.commit()
+                print("PROMOTED")
+            else:
+                print("EXISTS")
             return
         db.add(User(
             email=email,
             name=os.environ["SETUP_NAME"],
             password=hash_password(os.environ["SETUP_PASSWORD"]),
-            role="sales",  # promoted to admin via /auth/bootstrap-admin next
+            role=ROLE_ADMIN if first_admin else "sales",
+            is_admin=first_admin,
         ))
         await db.commit()
-        print("CREATED")
+        print("CREATED_ADMIN" if first_admin else "CREATED")
 
 asyncio.run(main())
 """
@@ -90,34 +106,14 @@ def register_admin(email, password, name):
     )
     if result.returncode != 0:
         raise RuntimeError(f"Could not create user in backend container: {result.stderr.strip()}")
-    if "EXISTS" in result.stdout:
+    out = result.stdout
+    if "CREATED_ADMIN" in out or "PROMOTED" in out:
+        print(f"  ✅ {email} is the admin account")
+    elif "EXISTS" in out:
         print("  Account already exists, logging in...")
     r = requests.post(f"{BASE}/auth/login", json={"email": email, "password": password})
     r.raise_for_status()
     return r.json()
-
-
-def promote_to_admin(access_token, email):
-    """
-    Directly promote user to admin via a raw SQL call through the backend.
-    We expose a one-time admin seed endpoint for this.
-    """
-    # We'll use the /rates/seed approach — but we need admin first.
-    # Instead we promote via the admin-bootstrap endpoint we add below.
-    r = requests.post(
-        f"{BASE}/auth/bootstrap-admin",
-        json={"email": email},
-        headers={"Authorization": f"Bearer {access_token}"},
-    )
-    if r.status_code == 200:
-        print(f"  ✅ {email} promoted to admin")
-        return True
-    elif r.status_code == 404:
-        print("  ℹ️  Bootstrap endpoint not yet available — you may need to restart backend after update")
-        return False
-    else:
-        print(f"  ⚠️  Could not auto-promote: {r.text}")
-        return False
 
 
 def seed_rates(access_token):
@@ -158,7 +154,7 @@ def main():
         print("❌ Password must be at least 8 characters")
         sys.exit(1)
 
-    print("\n🔑 Creating account (via backend container)...")
+    print("\n🔑 Creating admin account (via backend container)...")
     try:
         tokens = register_admin(email, password, name)
         access_token = tokens["access_token"]
@@ -166,9 +162,6 @@ def main():
     except Exception as e:
         print(f"  ❌ Account setup failed: {e}")
         sys.exit(1)
-
-    print("\n👑 Promoting to admin...")
-    promote_to_admin(access_token, email)
 
     print("\n💰 Seeding default material rates...")
     seed_rates(access_token)

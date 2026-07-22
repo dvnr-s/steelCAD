@@ -41,6 +41,16 @@ def burn_password_check() -> None:
     verify_password("invalid", _ENUMERATION_GUARD_HASH)
 
 
+def mark_password_changed(user: User) -> None:
+    """Bump the credential watermark so all outstanding tokens stop validating.
+
+    Call this on every password change/reset. Tokens carry the watermark they
+    were minted under; `get_current_user` / refresh reject any whose watermark
+    is older than the user's current one.
+    """
+    user.password_changed_at = datetime.now(timezone.utc)
+
+
 def anonymize_user(user: User) -> None:
     """Scrub a user's personal data in place and disable the account.
 
@@ -54,20 +64,39 @@ def anonymize_user(user: User) -> None:
     user.password = hash_password(secrets.token_urlsafe(32))
     user.is_admin = False
     user.deleted_at = datetime.now(timezone.utc)
+    mark_password_changed(user)  # invalidate any tokens still in flight
 
 
 # ─── JWT utilities ─────────────────────────────────────────────────
 
-def create_access_token(user_id: str) -> str:
+def _pwd_watermark(user: User) -> int:
+    """Credential watermark (integer microseconds) embedded in and checked
+    against tokens. Microsecond precision keeps a token minted in the same
+    wall-clock second as a password change from colliding with the new
+    watermark and surviving revocation."""
+    stamp = user.password_changed_at or user.created_at
+    return int(stamp.timestamp() * 1_000_000)
+
+
+def create_access_token(user: User) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": user_id, "exp": expire, "type": "access"}
+    payload = {"sub": str(user.id), "exp": expire, "type": "access", "pwd": _pwd_watermark(user)}
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
 
-def create_refresh_token(user_id: str) -> str:
+def create_refresh_token(user: User) -> str:
     expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
-    payload = {"sub": user_id, "exp": expire, "type": "refresh"}
+    payload = {"sub": str(user.id), "exp": expire, "type": "refresh", "pwd": _pwd_watermark(user)}
     return jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+
+
+def token_watermark_matches(user: User, payload: dict) -> bool:
+    """True if the token was minted under the user's current credential watermark.
+
+    A token issued before the last password change/reset carries an older `pwd`
+    claim and is rejected. Tokens minted before this claim existed have no `pwd`
+    and are likewise rejected (forcing a fresh login on upgrade)."""
+    return payload.get("pwd") == _pwd_watermark(user)
 
 
 def decode_token(token: str) -> dict:
@@ -108,6 +137,13 @@ async def get_current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found",
+        )
+    if not token_watermark_matches(user, payload):
+        # Password was changed/reset (or the account anonymized) after this token
+        # was issued — treat it as revoked.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Session expired — please sign in again",
         )
     return user
 

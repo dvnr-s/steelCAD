@@ -17,7 +17,7 @@ from app.services.ratelimit import limiter
 from app.models.user import User, ROLE_ADMIN, ROLE_OWNER, ROLE_SALES
 from app.schemas.user import UserInvite, UserResponse, UserRoleUpdate, AdminPasswordReset
 from app.services.audit import record_audit
-from app.services.auth import hash_password, require_role, anonymize_user
+from app.services.auth import hash_password, require_role, anonymize_user, mark_password_changed
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
@@ -137,7 +137,10 @@ async def reset_user_password(
             detail="Owners can only reset passwords for sales users",
         )
     user.password = hash_password(data.new_password)
+    mark_password_changed(user)  # force the target user's active sessions to re-auth
     await db.flush()
+    await record_audit(db, current_user, "user.password_reset", "user", user.id,
+                       "password reset by admin/owner")
     return {"message": "Password reset"}
 
 
