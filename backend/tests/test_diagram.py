@@ -4,6 +4,7 @@ Unit tests for the per-frame diagram + branded quotation HTML.
 These are pure (no DB, no WeasyPrint) so they run everywhere, exercising the SVG
 fallback renderer and the Jinja branding template directly.
 """
+import re
 from datetime import date
 from types import SimpleNamespace
 
@@ -105,9 +106,6 @@ def test_render_estimate_html_includes_branding_and_fallback_diagram():
 
 
 # ─── SS grill bars: drawn = billed, same pitch in every region (§6.2) ──
-
-import re
-
 
 def _ss_grill(bar_adjust=None):
     overlay = {"id": "g1", "type": "overlay", "overlayType": "grill", "material": "SS_PIPE_ROUND"}

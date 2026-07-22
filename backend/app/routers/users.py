@@ -8,11 +8,12 @@ Users router — invite-only user management (admin/owner only).
 """
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.services.ratelimit import limiter
 from app.models.user import User, ROLE_ADMIN, ROLE_OWNER, ROLE_SALES
 from app.schemas.user import UserInvite, UserResponse, UserRoleUpdate, AdminPasswordReset
 from app.services.audit import record_audit
@@ -38,7 +39,9 @@ async def list_users(
     status_code=status.HTTP_201_CREATED,
     summary="Invite a new user (admin/owner)",
 )
+@limiter.limit("20/hour")
 async def create_user(
+    request: Request,
     data: UserInvite,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_role(ROLE_ADMIN, ROLE_OWNER)),
@@ -113,7 +116,9 @@ async def update_user_role(
     "/{user_id}/password",
     summary="Reset a user's password (admin/owner)",
 )
+@limiter.limit("3/hour")
 async def reset_user_password(
+    request: Request,
     user_id: UUID,
     data: AdminPasswordReset,
     db: AsyncSession = Depends(get_db),

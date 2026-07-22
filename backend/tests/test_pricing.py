@@ -5,7 +5,10 @@ Tests the core business logic against the examples in design_rules_spec.md.
 These tests run WITHOUT a database — the pricing engine is pure Python.
 """
 import uuid
-from app.services.pricing import price_design, _round2, _round_rupee, DEFAULT_RATES
+from app.services.pricing import (
+    price_design, price_estimate, sum_other_charges,
+    _apply_commercial_terms, _round2, _round_rupee, DEFAULT_RATES,
+)
 
 
 # ─── Build a rate dict from DEFAULT_RATES ──────────────────────────
@@ -1015,9 +1018,6 @@ def test_window_and_door_frames_match_for_same_layout():
 # ═══════════════════════════════════════════════════════════════════
 # Test: Other charges (PR-9 — labor / transport / installation)
 # ═══════════════════════════════════════════════════════════════════
-
-from app.services.pricing import _apply_commercial_terms, price_estimate, sum_other_charges
-
 
 def test_other_charges_spec_example():
     """Spec §9.4 worked example: frames ₹10,000 + transport ₹1,500 +
