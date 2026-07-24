@@ -106,6 +106,30 @@ limit.
 **Tests.** `test_security.py`: two clients through one proxy socket key on distinct IPs;
 dev fallback to socket address; a client-prepended `X-Real-IP` tail is ignored.
 
+**Follow-up (deploy rehearsal, 2026-07-24) — the guarantee stops at the *first* proxy.**
+`client_ip()` trusts `X-Real-IP` because the bundled nginx sets it from `$remote_addr`.
+That holds only while nginx is the edge. Add a second proxy in front for TLS — exactly
+what [`DEPLOY.md`](DEPLOY.md) §7 recommends — and `$remote_addr` becomes *that* proxy's
+address for every request, silently restoring the original single-bucket DoS while every
+test still passes.
+
+`frontend/nginx.conf` now closes this with the realip module: `set_real_ip_from` for the
+private ranges (`10/8`, `172.16/12`, `192.168/16`, `127/8`) plus
+`real_ip_header X-Forwarded-For` and `real_ip_recursive on`. A front proxy on the
+Docker/host network is a trusted hop, so the original client address is recovered and
+`$remote_addr` — and therefore `X-Real-IP` — is correct again. A caller reaching the
+container directly from the public internet has a **public** source address, is not a
+trusted hop, and so still cannot spoof identity via `X-Forwarded-For`.
+
+Verified end-to-end against the production images: with the header set to `1.2.3.4`,
+six rapid bad logins returned `429`; a request carrying `5.6.7.8` got a fresh bucket
+(`401`) while `1.2.3.4` stayed limited.
+
+> **Residual risk.** The private ranges are trusted wholesale. On a public VPS that is
+> correct (external clients are public-addressed). If this container is ever exposed
+> directly to an untrusted *private* network, narrow `set_real_ip_from` to the proxy's
+> exact address — noted in `nginx.conf` and `DEPLOY.md` §7.1.
+
 ---
 
 ## 4. PDF rendering — HTML injection + SSRF / local-file read
@@ -199,3 +223,32 @@ missing `sectionSize`/`gauge` rejected. `test_pricing.py`: missing section field
   disabled). Set it only for a deliberate break-glass promotion, then unset it.
 - **Deploying the token change is a forced logout.** Existing tokens have no `pwd` claim and
   are rejected after upgrade — every user re-authenticates once. This is intended.
+
+### Deploy rehearsal — 2026-07-24
+
+The production images were built and run end-to-end locally (isolated compose project, fresh
+volume) before shipping. What it confirmed, and what it changed:
+
+**Verified against the production images.** Migrations `0001→0014` apply cleanly to an empty
+database; `APP_ENV=production` boots 4 workers and refuses to start on a dev/short
+`JWT_SECRET_KEY` or default DB credentials; `/docs`, `/redoc`, `/openapi.json` are `404` at the
+backend; HSTS + CSP + `nosniff` + `X-Frame-Options: DENY` present on API responses; login
+limit returns `429` on the 6th attempt; unauthenticated `/customers` is `401`; a malformed tree
+is `422`; `POST /auth/register` is gone (`404`); Postgres and the backend publish no host port.
+The full quote flow — customer → estimate → frame → price → BOM CSV → **WeasyPrint PDF**
+(valid `%PDF-`, ~18 KB) → `sent` status → `409` on editing a locked estimate — works. The PDF
+path is only testable in-container, so this is the first real exercise of it.
+
+**Found and fixed.**
+- *Schema drift (migration `0014`).* `alembic revision --autogenerate` against the migrated
+  database emitted two `ALTER`s: `estimates.quote_date` and `company_settings.updated_at` are
+  `NOT NULL` on the ORM models (so `create_all` enforces them in dev) but were left nullable by
+  migrations `0004`/`0005` — production had weaker constraints than dev and every test.
+  Latent rather than live (the ORM supplies defaults on both), now closed. The probe is part
+  of the deploy procedure ([`DEPLOY.md`](DEPLOY.md) §9).
+- *Rate-limit identity behind a second proxy* — see §3 follow-up above.
+- *Runbook commands that could not work.* `DEPLOY.md` documented `/api/...` paths, but the SPA
+  calls the API at the root and nginx proxies bare prefixes. `POST /api/auth/login` returns
+  `405`, so the documented rate-seeding step failed outright. Worse, **`GET /api/ready` returns
+  `200 text/html`** — the SPA fallback — so a status-code-only readiness check passes *while the
+  backend is down*. Corrected to root paths, with the body assertion spelled out.

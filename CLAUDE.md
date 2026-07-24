@@ -47,7 +47,7 @@ docker exec steelcad-backend-1 alembic current
 cd backend && ./venv/Scripts/python -m pytest -q
 docker exec steelcad-db-1 psql -U steelcad -c "CREATE DATABASE steelcad_test"   # once
 docker exec -e TEST_DATABASE_URL=postgresql+asyncpg://steelcad:steelcad@db:5432/steelcad_test \
-  steelcad-backend-1 python -m pytest -q              # full suite (98 tests) in container
+  steelcad-backend-1 python -m pytest -q              # full suite (205 tests) in container
 
 # Frontend lint / tests / build sanity
 cd frontend && npm run lint
@@ -155,7 +155,7 @@ without parsing JSON.
 (`assert_editable`); "revise" clones as rev N+1 and supersedes the parent, "duplicate"
 copies to a fresh draft. Designs/customers/estimates are **soft-deleted**
 (`deleted_at`) and restorable from the Trash page. Schema evolves via Alembic
-(`backend/migrations/versions/`, currently 0001–0013); dev startup still runs
+(`backend/migrations/versions/`, currently 0001–0014); dev startup still runs
 `create_all` as a convenience. **That convenience is also a trap — see the DB-parity
 warning under "Dev vs. prod": dev schemas are built by `create_all`, so migrations are
 only ever exercised for real in production.**
@@ -185,6 +185,11 @@ Consequences to keep in mind on every schema change:
   `IF EXISTS` / `IF NOT EXISTS` guards (see migration 0010's `DROP CONSTRAINT IF EXISTS`).
 - **Test migrations against a copy of the production schema, not just a fresh dev DB** — a
   fresh dev DB is built by `create_all` and never exercises the migration you just wrote.
+- **Prove the absence of drift instead of assuming it**: run `alembic revision
+  --autogenerate` against a migrated database and confirm the generated `upgrade()` is
+  `pass` (procedure in `docs/DEPLOY.md` §9). Any emitted `op.*` is a model/migration gap.
+  This is how migration 0014 was found — `estimates.quote_date` and
+  `company_settings.updated_at` were `NOT NULL` in dev but nullable in production.
 - WeasyPrint has no native libs on the Windows host, so PDF-rendering tests must run in the
   container (`docker exec … steelcad-backend-1 python -m pytest -q`), not on the host.
 
