@@ -10,15 +10,21 @@ is what only you can do (it needs your accounts and your money).
 
 ## 1. Create the server
 
-Any Ubuntu 24.04 box with ≥2 GB RAM. Two cheap options:
+Any Ubuntu 24.04 box with ≥2 GB RAM.
 
-| Provider | Plan | Cost |
-|---|---|---|
-| Hetzner | CX22 (2 vCPU / 4 GB) | ~€4/mo |
-| DigitalOcean | Basic droplet (1 vCPU / 2 GB) | ~$12/mo |
+**Pick a region in India.** This app is GST/₹-denominated, so its users are in
+India, and the editor issues a debounced price preview on every geometry edit.
+An EU/US region adds ~150 ms to each of those round trips and the canvas feels
+laggy; Bangalore or Mumbai keeps it at ~10–20 ms.
 
-1 GB works but the frontend's `npm run build` step can OOM during the image
-build — if you use a 1 GB box, add swap first.
+| Provider | Plan | Region | Cost |
+|---|---|---|---|
+| DigitalOcean | Basic 2 GB | **Bangalore (BLR1)** | ~$12/mo |
+| Linode/Akamai | Nanode 2 GB | Mumbai | ~$12/mo |
+| Hetzner | CX22 (4 GB) | EU/US only — cheap but far | ~€4/mo |
+
+Use ≥2 GB: the frontend image builds the Vite bundle inside Docker, and
+`npm ci` + `vite build` tends to OOM on a 1 GB box. Add swap if you must use one.
 
 **Open ports 22, 80 and 443 in the provider's firewall / security group.** This
 is the single most common reason the deploy finishes but the site won't load —
