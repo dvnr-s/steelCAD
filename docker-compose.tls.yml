@@ -1,0 +1,36 @@
+# SteelCAD — HTTPS overlay for docker-compose.prod.yml
+#
+# Adds a Caddy reverse proxy that terminates TLS with an automatically issued
+# and renewed Let's Encrypt certificate. Apply it ON TOP of the prod compose:
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.tls.yml up -d --build
+#
+# Requires SITE_ADDRESS in .env (a real hostname — Let's Encrypt will not issue
+# for a bare IP; use <your-ip>.sslip.io if you have no domain yet).
+#
+# Port ownership: Caddy takes 80 and 443 on the public interface, so the
+# frontend must stop publishing 80. deploy/bootstrap.sh sets
+# FRONTEND_PUBLISH=127.0.0.1:8080:80 in .env for that reason — the frontend
+# stays reachable on loopback for debugging (curl / SSH tunnel) without
+# fighting Caddy for the public port.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"    # required: ACME HTTP-01 challenge + HTTP→HTTPS redirect
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?SITE_ADDRESS is required for TLS (e.g. 203.0.113.9.sslip.io)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # certificates + ACME account — MUST persist,
+      - caddy_config:/config   # or you re-request certs on every restart and
+                               # hit Let's Encrypt rate limits (5 per week).
+    depends_on:
+      - frontend
+
+volumes:
+  caddy_data:
+  caddy_config:

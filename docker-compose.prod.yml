@@ -59,7 +59,11 @@ services:
     build: ./frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      # Defaults to publishing on :80 (plain-HTTP deploy, unchanged behaviour).
+      # When layering docker-compose.tls.yml, Caddy owns :80/:443 on the public
+      # interface, so .env sets FRONTEND_PUBLISH=127.0.0.1:8080:80 to move this
+      # out of the way — binding both 0.0.0.0:80 and 127.0.0.1:80 would clash.
+      - "${FRONTEND_PUBLISH:-80:80}"
     depends_on:
       - backend
 

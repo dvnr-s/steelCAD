@@ -1,0 +1,23 @@
+# SteelCAD — Caddy reverse proxy (automatic HTTPS)
+#
+# Used only by docker-compose.tls.yml. SITE_ADDRESS comes from .env, e.g.
+#   SITE_ADDRESS=203.0.113.9.sslip.io      (free wildcard-DNS hostname)
+#   SITE_ADDRESS=steelcad.example.com      (your own domain, later)
+#
+# Caddy obtains and renews a Let's Encrypt certificate for that hostname on its
+# own; certificates persist in the caddy_data volume across restarts.
+
+{$SITE_ADDRESS} {
+	# The frontend container serves the SPA and proxies API routes to the
+	# backend itself (see frontend/nginx.conf) — Caddy only needs to reach it.
+	# Resolved over the compose network by service name, so the frontend does
+	# not need a published host port.
+	reverse_proxy frontend:80
+
+	encode gzip
+
+	# Caddy sets X-Forwarded-For automatically. frontend/nginx.conf trusts
+	# private-range hops (set_real_ip_from 172.16.0.0/12) and re-derives the
+	# real client address from it, so per-client rate limiting still works
+	# instead of collapsing every user into one bucket. See docs/DEPLOY.md §7.
+}

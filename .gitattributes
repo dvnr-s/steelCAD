@@ -1,0 +1,10 @@
+# Files that are executed on Linux must keep LF endings regardless of the
+# committer's platform. This repo is developed on Windows (core.autocrlf=true)
+# and deployed to Ubuntu containers/VPS — a CRLF shell script fails there with
+# "bad interpreter: /bin/bash^M", and a CRLF Dockerfile RUN line breaks builds.
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+Caddyfile       text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf

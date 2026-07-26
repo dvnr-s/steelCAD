@@ -10,6 +10,7 @@
 # Credentials
 credentials.json
 token.json
+.admin-password
 
 # Python
 __pycache__/
