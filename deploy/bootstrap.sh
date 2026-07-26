@@ -124,7 +124,13 @@ done
 
 # ── 4. First admin account ───────────────────────────────────────────
 say "Bootstrapping the admin account"
-ADMIN_EMAIL="${ADMIN_EMAIL:-admin@steelcad.local}"
+# NOTE: this address must satisfy the API's `EmailStr` validator, not just the
+# database. Creating the row goes through SQLAlchemy, which validates nothing,
+# but POST /auth/login parses the body with EmailStr — so a special-use domain
+# (.local, .localhost, .test, .invalid) yields an account that exists and can
+# never log in, failing 422 with no hint as to why. The check below refuses to
+# create such an account instead of leaving that trap behind.
+ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-$(openssl rand -base64 15)Aa1!}"
 
 # Credentials are passed as container env vars and read with os.environ — NOT
@@ -142,6 +148,17 @@ from app.services.auth import hash_password
 
 email = os.environ["SC_ADMIN_EMAIL"]
 password = os.environ["SC_ADMIN_PASSWORD"]
+
+# Reject up front anything /auth/login would refuse to parse, so we never
+# create an account that exists but cannot authenticate.
+from pydantic import BaseModel, EmailStr
+class _Check(BaseModel):
+    email: EmailStr
+try:
+    _Check(email=email)
+except Exception:
+    print("BADEMAIL")
+    raise SystemExit(0)
 
 async def main():
     async with async_session_factory() as db:
@@ -169,7 +186,13 @@ case "$CREATED" in
         chmod 600 .admin-password
         ;;
     *EXISTS*) echo "admin ${ADMIN_EMAIL} already exists — leaving it alone" ;;
-    *)        die "admin bootstrap failed:\n$CREATED" ;;
+    *BADEMAIL*)
+        die "ADMIN_EMAIL='${ADMIN_EMAIL}' is not an address the API will accept.
+    Special-use domains (.local, .localhost, .test, .invalid) are rejected by
+    the login endpoint, so that account could never sign in.
+    Re-run with a real address:  ADMIN_EMAIL=you@yourdomain.com ./deploy/bootstrap.sh" ;;
+    *)        die "admin bootstrap failed:
+$CREATED" ;;
 esac
 
 # ── 5. Seed rates (pricing engine needs a populated rate table) ──────
