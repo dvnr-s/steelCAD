@@ -44,7 +44,9 @@ RUN sed -i 's#http://backend:8000#http://127.0.0.1:8000#' /etc/nginx/conf.d/defa
     && grep -q 'proxy_pass         http://127.0.0.1:8000;' /etc/nginx/conf.d/default.conf
 
 COPY deploy/render/ /opt/steelcad/
-RUN sed -i 's/\r$//' /opt/steelcad/start.sh
+RUN sed -i 's/\r$//' /opt/steelcad/start.sh \
+    && cp /opt/steelcad/cloudflare-realip.conf /etc/nginx/conf.d/ \
+    && nginx -t
 
 ENV APP_ENV=production
 CMD ["bash", "/opt/steelcad/start.sh"]

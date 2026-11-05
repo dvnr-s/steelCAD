@@ -12,7 +12,17 @@ case "${DATABASE_URL:-}" in
     postgres://*)   DATABASE_URL="postgresql+asyncpg://${DATABASE_URL#postgres://}" ;;
     postgresql://*) DATABASE_URL="postgresql+asyncpg://${DATABASE_URL#postgresql://}" ;;
 esac
-export DATABASE_URL
+# libpq-style query params (Neon's ?sslmode=require&channel_binding=require)
+# reach asyncpg as unknown connect() kwargs and crash it. TLS is driven by
+# DATABASE_SSL instead (verified context, app/database.py) — and forced on
+# whenever the URL asked for it, so stripping the params can't downgrade TLS.
+case "$DATABASE_URL" in
+    *\?*)
+        case "$DATABASE_URL" in *sslmode=require*|*sslmode=verify*) DATABASE_SSL=true ;; esac
+        DATABASE_URL="${DATABASE_URL%%\?*}"
+        ;;
+esac
+export DATABASE_URL DATABASE_SSL="${DATABASE_SSL:-false}"
 
 cd /app
 

@@ -1,20 +1,11 @@
 # SteelCAD — Render Blueprint (Dashboard → New → Blueprint → pick this repo).
 #
-# One web service (nginx + API in one container, Dockerfile.render) plus a
-# managed Postgres. Singapore is Render's closest region to India.
+# One web service (nginx + API in one container, Dockerfile.render). The
+# database is Neon (project muddy-wind-41258186, aws-ap-southeast-1 — same
+# region as this service), not Render Postgres, whose free tier expires after
+# 30 days. Singapore is Render's closest region to India.
 #
-# Free-tier caveats: the web service sleeps after 15 min idle (~1 min cold
-# start), and a free Postgres database EXPIRES 30 days after creation — upgrade
-# the database plan before then or the data is deleted.
-
-databases:
-  - name: steelcad-db
-    plan: free
-    region: singapore
-    databaseName: steelcad
-    user: steelcad
-    postgresMajorVersion: "16"
-    ipAllowList: []   # no public access — only Render services in this region
+# Free-tier caveat: the web service sleeps after 15 min idle (~1 min cold start).
 
 services:
   - type: web
@@ -28,12 +19,15 @@ services:
     envVars:
       - key: APP_ENV
         value: production
+      # Neon's DIRECT (non -pooler) URL, pasted in the dashboard:
+      #   neon connection-string production --project-id muddy-wind-41258186
+      # Direct, not pooled: this is a long-running server with its own pool, and
+      # asyncpg's prepared statements break under PgBouncer transaction mode.
+      # start.sh strips ?sslmode=… (asyncpg rejects it) and enables TLS.
       - key: DATABASE_URL
-        fromDatabase:
-          name: steelcad-db
-          property: connectionString   # internal URL, private network
+        sync: false
       - key: DATABASE_SSL
-        value: "false"
+        value: "true"                  # Neon is reached over the internet
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: CORS_ORIGINS
