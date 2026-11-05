@@ -32,19 +32,28 @@ def _build_env() -> Environment:
     return env
 
 
-def _data_only_url_fetcher(url: str):
-    """WeasyPrint URL fetcher that permits ONLY inline data: URIs.
+def _data_only_url_fetcher():
+    """Build a WeasyPrint URL fetcher that permits ONLY inline data: URIs.
 
     Templates legitimately embed the company logo as a data: URL and nothing
     else. Blocking every other scheme stops a hostile field (e.g. an injected
     `<img src="file:///etc/passwd">` or `src="http://internal/…">`) from turning
     a PDF render into local-file disclosure or a blind SSRF from the API host.
-    """
-    if not url.lower().startswith("data:"):
-        raise ValueError(f"Blocked non-data URL during PDF render: {url[:48]!r}")
-    from weasyprint import default_url_fetcher
 
-    return default_url_fetcher(url)
+    WeasyPrint ≥68 requires a `URLFetcher` instance (70 dropped plain-function
+    fetchers and `default_url_fetcher`). The scheme is enforced twice: by
+    WeasyPrint's own `allowed_protocols` and by our explicit check in `fetch`.
+    Imported lazily — WeasyPrint's native libs are absent on the Windows host.
+    """
+    from weasyprint import URLFetcher
+
+    class _DataOnlyURLFetcher(URLFetcher):
+        def fetch(self, url, headers=None):
+            if not url.lower().startswith("data:"):
+                raise ValueError(f"Blocked non-data URL during PDF render: {url[:48]!r}")
+            return super().fetch(url, headers)
+
+    return _DataOnlyURLFetcher(allowed_protocols={"data"}, allow_redirects=False)
 
 
 def _fmt(value: float) -> str:
@@ -138,7 +147,7 @@ def generate_estimate_pdf(estimate, company=None) -> bytes:
     """
     from weasyprint import HTML
     html_content = render_estimate_html(estimate, company)
-    return HTML(string=html_content, url_fetcher=_data_only_url_fetcher).write_pdf()
+    return HTML(string=html_content, url_fetcher=_data_only_url_fetcher()).write_pdf()
 
 
 # ─── Customer-facing quotation (summary PDF) ────────────────────────
@@ -306,5 +315,5 @@ def generate_customer_estimate_pdf(estimate, company=None) -> bytes:
     from weasyprint import HTML
     return HTML(
         string=render_customer_estimate_html(estimate, company),
-        url_fetcher=_data_only_url_fetcher,
+        url_fetcher=_data_only_url_fetcher(),
     ).write_pdf()
