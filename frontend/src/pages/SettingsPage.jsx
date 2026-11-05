@@ -3,6 +3,7 @@ import { Save, Building2, Upload, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { settingsApi } from '../api/client'
 import TopNav from '../components/TopNav'
+import { apiError } from '../lib/apiError'
 
 const EMPTY = {
   name: '', logo_data_url: null, address: '', phone: '', email: '',
@@ -48,7 +49,7 @@ export default function SettingsPage() {
       setForm({ ...EMPTY, ...data })
       toast.success('Company profile saved')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to save')
+      toast.error(apiError(err, 'Failed to save'))
     } finally {
       setSaving(false)
     }

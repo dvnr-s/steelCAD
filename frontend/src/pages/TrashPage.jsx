@@ -8,6 +8,7 @@ import { Trash2, RotateCcw, Users, LayoutGrid, FileText } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { trashApi, customersApi, designsApi, estimatesApi } from '../api/client'
 import TopNav from '../components/TopNav'
+import { apiError } from '../lib/apiError'
 
 const money = (n) => `₹${Number(n).toLocaleString('en-IN')}`
 const fmtDate = (d) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -61,7 +62,7 @@ export default function TrashPage() {
       toast.success(`${label} restored`)
       await load()
     } catch (err) {
-      toast.error(err.response?.data?.detail || `Failed to restore ${label.toLowerCase()}`)
+      toast.error(apiError(err, `Failed to restore ${label.toLowerCase()}`))
     } finally {
       setRestoring(false)
     }

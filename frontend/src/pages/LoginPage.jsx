@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { LogIn } from 'lucide-react'
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
+import { apiError } from '../lib/apiError'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -18,7 +19,7 @@ export default function LoginPage() {
       await login(email, password)
       navigate('/')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Invalid credentials')
+      toast.error(apiError(err, 'Invalid credentials'))
     } finally {
       setLoading(false)
     }

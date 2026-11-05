@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { usersApi } from '../api/client'
 import useAuthStore from '../store/authStore'
 import { useConfirm } from '../components/ConfirmModal'
+import { apiError } from '../lib/apiError'
 
 const ROLE_LABELS = { admin: 'Admin', owner: 'Owner', sales: 'Sales' }
 const ROLE_COLORS = {
@@ -38,7 +39,7 @@ function InviteModal({ currentUserRole, onClose, onCreated }) {
       onCreated(data)
       onClose()
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to invite user')
+      toast.error(apiError(err, 'Failed to invite user'))
     } finally {
       setSaving(false)
     }
@@ -135,7 +136,7 @@ function ResetPasswordModal({ user, onClose }) {
       toast.success(`Password reset for ${user.name}`)
       onClose()
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to reset password')
+      toast.error(apiError(err, 'Failed to reset password'))
     } finally {
       setSaving(false)
     }
@@ -189,7 +190,7 @@ export default function UsersPage() {
       setUsers((prev) => prev.map((u) => u.id === userId ? data : u))
       toast.success('Role updated')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to update role')
+      toast.error(apiError(err, 'Failed to update role'))
     } finally {
       setUpdatingRole(null)
     }
@@ -203,7 +204,7 @@ export default function UsersPage() {
       setUsers((prev) => prev.filter((u) => u.id !== user.id))
       toast.success('User deleted')
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to delete user')
+      toast.error(apiError(err, 'Failed to delete user'))
     } finally {
       setDeletingId(null)
     }

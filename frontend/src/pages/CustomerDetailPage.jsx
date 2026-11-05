@@ -6,6 +6,7 @@ import { customersApi, estimatesApi } from '../api/client'
 import TopNav from '../components/TopNav'
 import { useConfirm } from '../components/ConfirmModal'
 import useAuthStore from '../store/authStore'
+import { apiError } from '../lib/apiError'
 
 function formatDate(iso) {
   return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -25,11 +26,16 @@ function CustomerEditModal({ customer, onClose, onSaved }) {
     if (!form.name.trim()) { toast.error('Name is required'); return }
     setSaving(true)
     try {
-      const { data } = await customersApi.update(customer.id, form)
+      // Same normalization as NewCustomerModal: a blank field is null, not "" —
+      // the backend's EmailStr rejects "", which made any customer saved
+      // without an email impossible to edit.
+      const payload = Object.fromEntries(Object.entries(form).map(([k, v]) => [k, v.trim() || null]))
+      payload.name = form.name.trim()
+      const { data } = await customersApi.update(customer.id, payload)
       toast.success('Customer updated')
       onSaved(data)
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to update customer')
+      toast.error(apiError(err, 'Failed to update customer'))
       setSaving(false)
     }
   }

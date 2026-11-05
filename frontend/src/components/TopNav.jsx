@@ -7,6 +7,7 @@ import { LogOut, Settings, Users, LayoutGrid, UserCog, Building2, KeyRound, X, A
 import toast from 'react-hot-toast'
 import useAuthStore from '../store/authStore'
 import { authApi } from '../api/client'
+import { apiError } from '../lib/apiError'
 
 const ROLE_LABELS = { admin: 'Admin', owner: 'Owner', sales: 'Sales' }
 const ROLE_BADGE_STYLE = {
@@ -29,7 +30,7 @@ function ChangePasswordModal({ onClose }) {
       toast.success('Password updated')
       onClose()
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to change password')
+      toast.error(apiError(err, 'Failed to change password'))
     } finally {
       setSaving(false)
     }
@@ -70,7 +71,7 @@ function DeleteAccountModal({ onClose, onDeleted }) {
       await authApi.deleteAccount(password)
       onDeleted()
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to delete account')
+      toast.error(apiError(err, 'Failed to delete account'))
       setDeleting(false)
     }
   }

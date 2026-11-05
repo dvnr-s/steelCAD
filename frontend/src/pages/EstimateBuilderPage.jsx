@@ -9,6 +9,7 @@ import TopNav from '../components/TopNav'
 import DimensionInput from '../components/DimensionInput'
 import useThumbnail from '../hooks/useThumbnail'
 import { useConfirm } from '../components/ConfirmModal'
+import { apiError } from '../lib/apiError'
 
 // Estimate lifecycle: only 'draft' is editable; the rest lock the estimate.
 // 'superseded' is terminal (set only by Revise) and can't be picked manually.
@@ -263,7 +264,7 @@ export default function EstimateBuilderPage() {
       toast.success(`Created EST-${String(data.number).padStart(4, '0')} rev ${data.revision}`)
       navigate(`/estimates/${data.id}`)
     } catch (err) {
-      toast.error(err.response?.data?.detail || 'Failed to revise estimate')
+      toast.error(apiError(err, 'Failed to revise estimate'))
     }
   }
 
