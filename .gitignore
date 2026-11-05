@@ -35,3 +35,9 @@ frontend/.vite/
 # IDE
 .vscode/
 .idea/
+
+# Personal career materials — not part of the client deliverable
+career-prep/
+
+# Database dumps from deploy/backup.sh — contain customer PII
+backups/

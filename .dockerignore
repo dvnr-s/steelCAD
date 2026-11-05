@@ -1,0 +1,14 @@
+# Used only by Dockerfile.render (repo-root build context). The compose builds
+# use backend/ and frontend/ as their contexts and their own .dockerignore files.
+.git
+**/node_modules
+**/dist
+**/.vite
+**/venv
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.env
+backups/
+career-prep/
+docs/
