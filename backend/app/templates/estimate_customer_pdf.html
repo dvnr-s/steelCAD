@@ -55,9 +55,10 @@
 <body>
   <div class="header">
     <div style="display:flex; align-items:flex-start; gap:12px;">
-      {% if company.logo_data_url %}<img src="{{ company.logo_data_url }}" style="max-height:54px; max-width:160px;" />{% endif %}
+      {# The logo carries the company name, so the text heading is only a fallback #}
+      {% if company.logo_data_url %}<img src="{{ company.logo_data_url }}" style="max-height:64px; max-width:220px;" />{% endif %}
       <div>
-        <div class="brand">{{ company.name }}</div>
+        {% if not company.logo_data_url %}<div class="brand">{{ company.name }}</div>{% endif %}
         <div class="brand-sub">Steel Doors &amp; Windows</div>
         {% if company.address %}<div class="brand-sub">{{ company.address }}</div>{% endif %}
         <div class="brand-sub">
